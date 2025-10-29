@@ -199,10 +199,12 @@ void make_buoyancy (const Vector<MultiFab>& S_data,
             AMREX_ASSERT( !anelastic && (solverChoice.moisture_type == MoistureType::None) && solverChoice.buoyancy_type == 1 );
 
             Array4<const EBCellFlag> cellflg = (ebfact.get_const_factory())->getMultiEBCellFlagFab()[mfi].const_array();
+            Array4<const Real      > volcent = (ebfact.get_const_factory())->getCentroid()[mfi].const_array();
+            Array4<const EBCellFlag> w_cellflg = (ebfact.get_w_const_factory())->getMultiEBCellFlagFab()[mfi].const_array();
 
             ParallelFor(tbz, [=] AMREX_GPU_DEVICE (int i, int j, int k)
             {
-                buoyancy_fab(i, j, k) = buoyancy_rhopert_eb(i,j,k,grav_gpu[2],r0_arr,cell_data,qt_arr,cellflg);
+                buoyancy_fab(i, j, k) = buoyancy_rhopert_eb(i,j,k,grav_gpu[2],r0_arr,cell_data,qt_arr,cellflg,volcent,w_cellflg);
             });
         } // TerrainType::EB
     } // mfi
