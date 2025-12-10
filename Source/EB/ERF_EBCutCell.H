@@ -343,8 +343,8 @@ struct eb_cut_cell_::path_data
   path_data() = default;
 
   bool intersected{};
-  bool intersected_start{};
-  bool intersected_end{};
+  std::array<bool,8> intersected_vertices{{false, false, false, false,
+                                         false, false, false, false}};
   amrex::RealVect vIP{};
   amrex::Real    distIP{};
   amrex::Real    edge_length{};
@@ -368,9 +368,8 @@ struct eb_cut_cell_::path_data
     vIP = v_intersect;
     distIP = dist_intersect;
     edge_length = (v_start - v_end).vectorLength();
-    // check if intersection is at vertices
-    intersected_start = (amrex::Math::abs(dist_intersect) < tol);
-    intersected_end   = (amrex::Math::abs(edge_length - dist_intersect) < tol);
+    intersected_vertices[idx_start] = (amrex::Math::abs(dist_intersect) < tol);
+    intersected_vertices[idx_end]   = (amrex::Math::abs(edge_length - dist_intersect) < tol);
   }
 };
 
@@ -412,7 +411,7 @@ calc_edge_intersections ()
   amrex::RealVect vIP;
   amrex::Real distIP;
 
-  amrex::Array<bool,8> vertex_intersected{}; // true if vertex has been intersected within a path.
+  std::array<bool,8> vertex_intersected{}; // true if vertex has been intersected within a path.
 
   //------------------------------------------------------------
   // STEP 1: Predefine edge-plane intersections along 6 paths.
@@ -458,7 +457,7 @@ calc_edge_intersections ()
 
     if (p1[0].intersected) {
 
-      if (p1[0].intersected_start) {
+      if (p1[0].intersected_vertices[0]) {
         m_F1.add_vertex(v0); if(print_F1) printf("Path 1: v0--v1: add v0 -> F1\n");
         m_F4.add_vertex(v0); if(print_F4) printf("Path 1: v0--v1: add v0 -> F4\n");
         m_F5.add_vertex(v0); if(print_F5) printf("Path 1: v0--v1: add v0 -> F5\n");
@@ -467,7 +466,7 @@ calc_edge_intersections ()
           vertex_intersected[0] = true;
           ++cuts;
         }
-      } else if (p1[0].intersected_end) {
+      } else if (p1[0].intersected_vertices[1]) {
         m_F1.add_vertex(v1); if(print_F1) printf("Path 1: v0--v1: add v1 -> F1\n");
         m_F2.add_vertex(v1); if(print_F2) printf("Path 1: v0--v1: add v1 -> F2\n");
         m_F5.add_vertex(v1); if(print_F5) printf("Path 1: v0--v1: add v1 -> F5\n");
@@ -493,7 +492,7 @@ calc_edge_intersections ()
 
     if (p1[1].intersected) {
 
-      if (p1[1].intersected_start) {
+      if (p1[1].intersected_vertices[1]) {
         m_F1.add_vertex(v1); if(print_F1) printf("Path 1: v1--v4: add v1 -> F1\n");
         m_F2.add_vertex(v1); if(print_F2) printf("Path 1: v1--v4: add v1 -> F2\n");
         m_F5.add_vertex(v1); if(print_F5) printf("Path 1: v1--v4: add v1 -> F5\n");
@@ -502,7 +501,7 @@ calc_edge_intersections ()
           vertex_intersected[1] = true;
           ++cuts;
         }
-      } else if (p1[1].intersected_end) {
+      } else if (p1[1].intersected_vertices[4]) {
         m_F2.add_vertex(v4); if(print_F2) printf("Path 1: v1--v4: add v4 -> F2\n");
         m_F3.add_vertex(v4); if(print_F3) printf("Path 1: v1--v4: add v4 -> F3\n");
         m_F5.add_vertex(v4); if(print_F5) printf("Path 1: v1--v4: add v4 -> F5\n");
@@ -528,7 +527,7 @@ calc_edge_intersections ()
 
     if (p1[2].intersected) {
 
-      if (p1[2].intersected_start) {
+      if (p1[2].intersected_vertices[4]) {
         m_F2.add_vertex(v4); if(print_F2) printf("Path 1: v4--v7: add v4 -> F2\n");
         m_F3.add_vertex(v4); if(print_F3) printf("Path 1: v4--v7: add v4 -> F3\n");
         m_F5.add_vertex(v4); if(print_F5) printf("Path 1: v4--v7: add v4 -> F5\n");
@@ -537,7 +536,7 @@ calc_edge_intersections ()
           vertex_intersected[4] = true;
           ++cuts;
         }
-      } else if (p1[2].intersected_end) {
+      } else if (p1[2].intersected_vertices[7]) {
         m_F2.add_vertex(v7); if(print_F2) printf("Path 1: v4--v7: add v7 -> F2\n");
         m_F3.add_vertex(v7); if(print_F3) printf("Path 1: v4--v7: add v7 -> F3\n");
         m_F6.add_vertex(v7); if(print_F6) printf("Path 1: v4--v7: add v7 -> F6\n");
@@ -568,12 +567,12 @@ calc_edge_intersections ()
   // Path 4
   if (p4.intersected) {
 
-    if (p4.intersected_start) {
+    if (p4.intersected_vertices[1]) {
       m_F1.add_vertex(v1); if(print_F1) printf("Path 4: v1--v5: add v1 -> F1\n");
       m_F2.add_vertex(v1); if(print_F2) printf("Path 4: v1--v5: add v1 -> F2\n");
       m_F5.add_vertex(v1); if(print_F5) printf("Path 4: v1--v5: add v1 -> F5\n");
       m_F7.add_vertex(v1); if(print_F7) printf("Path 4: v1--v5: add v1 -> F7\n");
-    } else if (p4.intersected_end) {
+    } else if (p4.intersected_vertices[5]) {
       m_F1.add_vertex(v5); if(print_F1) printf("Path 4: v1--v5: add v5 -> F1\n");
       m_F2.add_vertex(v5); if(print_F2) printf("Path 4: v1--v5: add v5 -> F2\n");
       m_F6.add_vertex(v5); if(print_F6) printf("Path 4: v1--v5: add v5 -> F6\n");
@@ -591,7 +590,7 @@ calc_edge_intersections ()
 
     if (p2[0].intersected) {
 
-      if (p2[0].intersected_start) {
+      if (p2[0].intersected_vertices[0]) {
         m_F1.add_vertex(v0); if(print_F1) printf("Path 2: v0--v2: add v0 -> F1\n");
         m_F4.add_vertex(v0); if(print_F4) printf("Path 2: v0--v2: add v0 -> F4\n");
         m_F5.add_vertex(v0); if(print_F5) printf("Path 2: v0--v2: add v0 -> F5\n");
@@ -600,7 +599,7 @@ calc_edge_intersections ()
           vertex_intersected[0] = true;
           ++cuts;
         }
-      } else if (p2[0].intersected_end) {
+      } else if (p2[0].intersected_vertices[2]) {
         m_F1.add_vertex(v2); if(print_F1) printf("Path 2: v0--v2: add v2 -> F1\n");
         m_F4.add_vertex(v2); if(print_F4) printf("Path 2: v0--v2: add v2 -> F4\n");
         m_F6.add_vertex(v2); if(print_F6) printf("Path 2: v0--v2: add v2 -> F6\n");
@@ -626,7 +625,7 @@ calc_edge_intersections ()
 
     if (p2[1].intersected) {
 
-      if (p2[1].intersected_start) {
+      if (p2[1].intersected_vertices[2]) {
         m_F1.add_vertex(v2); if(print_F1) printf("Path 2: v2--v5: add v2 -> F1\n");
         m_F4.add_vertex(v2); if(print_F4) printf("Path 2: v2--v5: add v2 -> F4\n");
         m_F6.add_vertex(v2); if(print_F6) printf("Path 2: v2--v5: add v2 -> F6\n");
@@ -635,7 +634,7 @@ calc_edge_intersections ()
           vertex_intersected[2] = true;
           ++cuts;
         }
-      } else if (p2[1].intersected_end) {
+      } else if (p2[1].intersected_vertices[5]) {
         m_F1.add_vertex(v5); if(print_F1) printf("Path 2: v2--v5: add v5 -> F1\n");
         m_F2.add_vertex(v5); if(print_F2) printf("Path 2: v2--v5: add v5 -> F2\n");
         m_F6.add_vertex(v5); if(print_F6) printf("Path 2: v2--v5: add v5 -> F6\n");
@@ -660,7 +659,7 @@ calc_edge_intersections ()
 
     if (p2[2].intersected) {
 
-      if (p2[2].intersected_start) {
+      if (p2[2].intersected_vertices[5]) {
         m_F1.add_vertex(v5); if(print_F1) printf("Path 2: v5--v7: add v5 -> F1\n");
         m_F2.add_vertex(v5); if(print_F2) printf("Path 2: v5--v7: add v5 -> F2\n");
         m_F6.add_vertex(v5); if(print_F6) printf("Path 2: v5--v7: add v5 -> F6\n");
@@ -669,7 +668,7 @@ calc_edge_intersections ()
           vertex_intersected[5] = true;
           ++cuts;
         }
-      } else if (p2[2].intersected_end) {
+      } else if (p2[2].intersected_vertices[7]) {
         m_F2.add_vertex(v7); if(print_F2) printf("Path 2: v5--v7: add v7 -> F2\n");
         m_F3.add_vertex(v7); if(print_F3) printf("Path 2: v5--v7: add v7 -> F3\n");
         m_F6.add_vertex(v7); if(print_F6) printf("Path 2: v5--v7: add v7 -> F6\n");
@@ -700,12 +699,12 @@ calc_edge_intersections ()
   // Path 5
   if (p5.intersected) {
 
-    if (p5.intersected_start) {
+    if (p5.intersected_vertices[2]) {
       m_F1.add_vertex(v2); if(print_F1) printf("Path 5: v2--v6: add v2 -> F1\n");
       m_F4.add_vertex(v2); if(print_F4) printf("Path 5: v2--v6: add v2 -> F4\n");
       m_F6.add_vertex(v2); if(print_F6) printf("Path 5: v2--v6: add v2 -> F6\n");
       m_F7.add_vertex(v2); if(print_F7) printf("Path 5: v2--v6: add v2 -> F7\n");
-    } else if (p5.intersected_end) {
+    } else if (p5.intersected_vertices[6]) {
       m_F3.add_vertex(v6); if(print_F3) printf("Path 5: v2--v6: add v6 -> F3\n");
       m_F4.add_vertex(v6); if(print_F4) printf("Path 5: v2--v6: add v6 -> F4\n");
       m_F6.add_vertex(v6); if(print_F6) printf("Path 5: v2--v6: add v6 -> F6\n");
@@ -724,7 +723,7 @@ calc_edge_intersections ()
 
     if (p3[0].intersected) {
 
-      if (p3[0].intersected_start) {
+      if (p3[0].intersected_vertices[0]) {
         m_F1.add_vertex(v0); if(print_F1) printf("Path 3: v0--v3: add v0 -> F1\n");
         m_F4.add_vertex(v0); if(print_F4) printf("Path 3: v0--v3: add v0 -> F4\n");
         m_F5.add_vertex(v0); if(print_F5) printf("Path 3: v0--v3: add v0 -> F5\n");
@@ -733,7 +732,7 @@ calc_edge_intersections ()
           vertex_intersected[0] = true;
           ++cuts;
         }
-      } else if (p3[0].intersected_end) {
+      } else if (p3[0].intersected_vertices[3]) {
         m_F3.add_vertex(v3); if(print_F3) printf("Path 3: v0--v3: add v3 -> F3\n");
         m_F4.add_vertex(v3); if(print_F4) printf("Path 3: v0--v3: add v3 -> F4\n");
         m_F5.add_vertex(v3); if(print_F5) printf("Path 3: v0--v3: add v3 -> F5\n");
@@ -759,7 +758,7 @@ calc_edge_intersections ()
 
     if (p3[1].intersected) {
 
-      if (p3[1].intersected_start) {
+      if (p3[1].intersected_vertices[3]) {
         m_F3.add_vertex(v3); if(print_F3) printf("Path 3: v3--v6: add v3 -> F3\n");
         m_F4.add_vertex(v3); if(print_F4) printf("Path 3: v3--v6: add v3 -> F4\n");
         m_F5.add_vertex(v3); if(print_F5) printf("Path 3: v3--v6: add v3 -> F5\n");
@@ -768,7 +767,7 @@ calc_edge_intersections ()
           vertex_intersected[3] = true;
           ++cuts;
         }
-      } else if (p3[1].intersected_end) {
+      } else if (p3[1].intersected_vertices[6]) {
         m_F3.add_vertex(v6); if(print_F3) printf("Path 3: v3--v6: add v6 -> F3\n");
         m_F4.add_vertex(v6); if(print_F4) printf("Path 3: v3--v6: add v6 -> F4\n");
         m_F6.add_vertex(v6); if(print_F6) printf("Path 3: v3--v6: add v6 -> F6\n");
@@ -794,7 +793,7 @@ calc_edge_intersections ()
 
     if (p3[2].intersected) {
 
-      if (p3[2].intersected_start) {
+      if (p3[2].intersected_vertices[6]) {
         m_F3.add_vertex(v6); if(print_F3) printf("Path 3: v6--v7: add v6 -> F3\n");
         m_F4.add_vertex(v6); if(print_F4) printf("Path 3: v6--v7: add v6 -> F4\n");
         m_F6.add_vertex(v6); if(print_F6) printf("Path 3: v6--v7: add v6 -> F6\n");
@@ -803,7 +802,7 @@ calc_edge_intersections ()
           vertex_intersected[6] = true;
           ++cuts;
         }
-      } else if (p3[2].intersected_end) {
+      } else if (p3[2].intersected_vertices[7]) {
         m_F2.add_vertex(v7); if(print_F2) printf("Path 3: v6--v7: add v7 -> F2\n");
         m_F3.add_vertex(v7); if(print_F3) printf("Path 3: v6--v7: add v7 -> F3\n");
         m_F6.add_vertex(v7); if(print_F6) printf("Path 3: v6--v7: add v7 -> F6\n");
@@ -834,12 +833,12 @@ calc_edge_intersections ()
   // Path 6
   if (p6.intersected) {
 
-    if (p6.intersected_start) {
+    if (p6.intersected_vertices[3]) {
       m_F3.add_vertex(v3); if(print_F3) printf("Path 6: v3--v4: add v3 -> F3\n");
       m_F4.add_vertex(v3); if(print_F4) printf("Path 6: v3--v4: add v3 -> F4\n");
       m_F5.add_vertex(v3); if(print_F5) printf("Path 6: v3--v4: add v3 -> F5\n");
       m_F7.add_vertex(v3); if(print_F7) printf("Path 6: v3--v4: add v3 -> F7\n");
-    } else if (p6.intersected_end) {
+    } else if (p6.intersected_vertices[4]) {
       m_F2.add_vertex(v4); if(print_F2) printf("Path 6: v3--v4: add v4 -> F2\n");
       m_F3.add_vertex(v4); if(print_F3) printf("Path 6: v3--v4: add v4 -> F3\n");
       m_F5.add_vertex(v4); if(print_F5) printf("Path 6: v3--v4: add v4 -> F5\n");
