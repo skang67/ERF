@@ -446,6 +446,63 @@ calc_edge_intersections ()
   // Path 6: v3->v4
   p6.set(m_eb_point, m_eb_normal, vertices, 3, 4);
 
+  // Correct intersected vertices if the vertices are intersected three times.
+  if (p1[0].intersected_vertices[0] &&
+      p2[0].intersected_vertices[0] &&
+      p3[0].intersected_vertices[0]) {
+    p3[0].intersected = false;
+    p3[0].intersected_vertices[0] = false;
+  }
+
+  if (p1[0].intersected_vertices[1] &&
+      p1[1].intersected_vertices[1] &&
+      p4.intersected_vertices[1]) {
+    p4.intersected = false;
+    p4.intersected_vertices[1] = false;
+  }
+
+  if (p2[0].intersected_vertices[2] &&
+      p2[1].intersected_vertices[2] &&
+      p5.intersected_vertices[2]) {
+    p5.intersected = false;
+    p5.intersected_vertices[2] = false;
+  }
+
+  if (p3[0].intersected_vertices[3] &&
+      p3[1].intersected_vertices[3] &&
+      p6.intersected_vertices[3]) {
+    p6.intersected = false;
+    p6.intersected_vertices[3] = false;
+  }
+
+  if (p1[1].intersected_vertices[4] &&
+      p1[2].intersected_vertices[4] &&
+      p6.intersected_vertices[4]) {
+    p6.intersected = false;
+    p6.intersected_vertices[4] = false;
+  }
+
+  if (p2[1].intersected_vertices[5] &&
+      p2[2].intersected_vertices[5] &&
+      p4.intersected_vertices[5]) {
+    p4.intersected = false;
+    p4.intersected_vertices[5] = false;
+  }
+
+  if (p3[1].intersected_vertices[6] &&
+      p3[2].intersected_vertices[6] &&
+      p5.intersected_vertices[6]) {
+    p5.intersected = false;
+    p5.intersected_vertices[6] = false;
+  }
+
+  if (p1[2].intersected_vertices[7] &&
+      p2[2].intersected_vertices[7] &&
+      p3[2].intersected_vertices[7]) {
+    p3[2].intersected = false;
+    p3[2].intersected_vertices[7] = false;
+  }
+
   //------------------------------------------------------------
   // STEP 2: Add vertices to faces.
   //------------------------------------------------------------
