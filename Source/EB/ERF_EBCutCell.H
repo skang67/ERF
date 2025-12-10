@@ -353,12 +353,15 @@ struct eb_cut_cell_::path_data
   AMREX_FORCE_INLINE
   void set(const amrex::RealVect& eb_point,
           const amrex::RealVect& eb_normal,
-          const amrex::RealVect& v_start,
-          const amrex::RealVect& v_end)
+          const std::array<amrex::RealVect,8>& vertices,
+          const int idx_start,
+          const int idx_end)
   {
     constexpr amrex::Real tol = 1.e-15;
     amrex::RealVect v_intersect;
     amrex::Real    dist_intersect;
+    amrex::RealVect const& v_start = vertices[idx_start];
+    amrex::RealVect const& v_end = vertices[idx_end];
     intersected = utils::intersect_plane_edge(
       eb_point, eb_normal, v_start, v_end, v_intersect, dist_intersect
     );
@@ -387,8 +390,7 @@ calc_edge_intersections ()
   amrex::RealVect v5(m_rbox.hi(0), m_rbox.hi(1), m_rbox.lo(2));
   amrex::RealVect v6(m_rbox.lo(0), m_rbox.hi(1), m_rbox.hi(2));
   amrex::RealVect v7(m_rbox.hi(0), m_rbox.hi(1), m_rbox.hi(2));
-
-// #ifndef AMREX_USE_GPU
+  std::array<amrex::RealVect,8> vertices{v0,v1,v2,v3,v4,v5,v6,v7};
 
   bool print_initial = ( Math::abs(m_eb_point[0]-1.666667e-01)<1.e-4 &&
                          Math::abs(m_eb_point[1]+4.194018e-01)<1.e-4 &&
@@ -400,7 +402,6 @@ calc_edge_intersections ()
   const bool print_F5 = print_initial && false;
   const bool print_F6 = print_initial && false;
   const bool print_F7 = print_initial && false;
-// #endif
 
   m_F1.add_vertex(v0); if(print_F1) printf("Initial: add v0 -> F1\n");
   m_F4.add_vertex(v0); if(print_F4) printf("Initial: add v0 -> F4\n");
@@ -423,28 +424,28 @@ calc_edge_intersections ()
   path_data p4, p5, p6;
 
   // Path 1: v0->v1->v4->v7
-  p1[0].set(m_eb_point, m_eb_normal, v0, v1);
-  p1[1].set(m_eb_point, m_eb_normal, v1, v4);
-  p1[2].set(m_eb_point, m_eb_normal, v4, v7);
+  p1[0].set(m_eb_point, m_eb_normal, vertices, 0, 1);
+  p1[1].set(m_eb_point, m_eb_normal, vertices, 1, 4);
+  p1[2].set(m_eb_point, m_eb_normal, vertices, 4, 7);
 
   // Path 2: v0->v2->v5->v7
-  p2[0].set(m_eb_point, m_eb_normal, v0, v2);
-  p2[1].set(m_eb_point, m_eb_normal, v2, v5);
-  p2[2].set(m_eb_point, m_eb_normal, v5, v7);
+  p2[0].set(m_eb_point, m_eb_normal, vertices, 0, 2);
+  p2[1].set(m_eb_point, m_eb_normal, vertices, 2, 5);
+  p2[2].set(m_eb_point, m_eb_normal, vertices, 5, 7);
 
   // Path 3: v0->v3->v6->v7
-  p3[0].set(m_eb_point, m_eb_normal, v0, v3);
-  p3[1].set(m_eb_point, m_eb_normal, v3, v6);
-  p3[2].set(m_eb_point, m_eb_normal, v6, v7);
+  p3[0].set(m_eb_point, m_eb_normal, vertices, 0, 3);
+  p3[1].set(m_eb_point, m_eb_normal, vertices, 3, 6);
+  p3[2].set(m_eb_point, m_eb_normal, vertices, 6, 7);
 
   // Path 4: v1->v5
-  p4.set(m_eb_point, m_eb_normal, v1, v5);
+  p4.set(m_eb_point, m_eb_normal, vertices, 1, 5);
 
   // Path 5: v2->v6
-  p5.set(m_eb_point, m_eb_normal, v2, v6);
+  p5.set(m_eb_point, m_eb_normal, vertices, 2, 6);
 
   // Path 6: v3->v4
-  p6.set(m_eb_point, m_eb_normal, v3, v4);
+  p6.set(m_eb_point, m_eb_normal, vertices, 3, 4);
 
   //------------------------------------------------------------
   // STEP 2: Add vertices to faces.
