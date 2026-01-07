@@ -291,4 +291,212 @@
                 project_momenta(level, slow_dt, S_sum);
             }
         }
+
+
+        // SK ********************************************************************************
+        if ( ( std::fmod(time_for_fp, 5.0) < slow_dt ) &&nrk == 2) {
+        // if ( nrk == 2) {
+            for ( MFIter mfi(S_sum[IntVars::cons],TilingIfNotGPU()); mfi.isValid(); ++mfi)
+            {
+                const Box bx = mfi.tilebox();
+                Box tbx = mfi.nodaltilebox(0);
+                Box tby = mfi.nodaltilebox(1);
+                Box tbz = mfi.nodaltilebox(2);
+
+                const int ilo = bx.smallEnd(0);
+                const int ihi = bx.bigEnd(0);
+                const int khi = bx.bigEnd(2);
+
+                const int idom_hi = fine_geom.Domain().bigEnd(0);
+                const int jdom_hi = fine_geom.Domain().bigEnd(1);
+                const int icen = (idom_hi+1)/2;
+                const int jcen = (jdom_hi+1)/2;
+
+                int k110lo = 0;
+                int k300lo = 0;
+                int k500lo = 0;
+
+                Real z110lo = 0; // low height
+                Real z300lo = 0;
+                Real z500lo = 0;
+
+                // Vector<Real> dz(3, 0.0);
+                Real dz[3] = {0.0,0.0,0.0};
+
+                if (solverChoice.terrain_type == TerrainType::StaticFittedMesh) {
+                    if (ilo<icen && icen<ihi) {
+                        const Array4<const Real>& z_nd_old = z_phys_nd[level]->const_array(mfi);
+#ifdef AMREX_USE_GPU
+                        amrex::Gpu::DeviceScalar<int> d_k110(0), d_k300(0), d_k500(0);
+                        amrex::Gpu::DeviceScalar<Real> d_z110(0.0), d_z300(0.0), d_z500(0.0);
+                        int* k_lo_ptr[3] = {d_k110.dataPtr(), d_k300.dataPtr(), d_k500.dataPtr()};
+                        Real* z_lo_ptr[3] = {d_z110.dataPtr(), d_z300.dataPtr(), d_z500.dataPtr()};
+
+                        amrex::Gpu::DeviceScalar<Real> d_dz[3] = {amrex::Gpu::DeviceScalar<Real>(0.0),
+                                                                  amrex::Gpu::DeviceScalar<Real>(0.0),
+                                                                  amrex::Gpu::DeviceScalar<Real>(0.0)};
+                        Real* dz_ptr[3] = {d_dz[0].dataPtr(), d_dz[1].dataPtr(), d_dz[2].dataPtr()};
+
+                        amrex::ParallelFor(1, [=] AMREX_GPU_DEVICE (int /*dummy*/) {
+                            bool exceed0 = false;
+                            bool exceed1 = false;
+                            bool exceed2 = false;
+                            for (int k=0; k<=khi+1; ++k) {
+                                Real z = z_nd_old(icen,jcen,k);
+                                if (!exceed0 && z > 110.0) {
+                                    *k_lo_ptr[0] = k-1;
+                                    *z_lo_ptr[0] = z_nd_old(icen,jcen,k-1);
+                                    *dz_ptr[0] = z_nd_old(icen,jcen,k) - z_nd_old(icen,jcen,k-1);
+                                    exceed0 = true;
+                                }
+                                if (!exceed1 && z > 300.0) {
+                                    *k_lo_ptr[1] = k-1;
+                                    *z_lo_ptr[1] = z_nd_old(icen,jcen,k-1);
+                                    *dz_ptr[1] = z_nd_old(icen,jcen,k) - z_nd_old(icen,jcen,k-1);
+                                    exceed1 = true;
+                                }
+                                if (!exceed2 && z > 500.0) {
+                                    *k_lo_ptr[2] = k-1;
+                                    *z_lo_ptr[2] = z_nd_old(icen,jcen,k-1);
+                                    *dz_ptr[2] = z_nd_old(icen,jcen,k) - z_nd_old(icen,jcen,k-1);
+                                    exceed2 = true;
+                                }
+                            }
+                        });
+                        k110lo = d_k110.dataValue(); z110lo = d_z110.dataValue();
+                        k300lo = d_k300.dataValue(); z300lo = d_z300.dataValue();
+                        k500lo = d_k500.dataValue(); z500lo = d_z500.dataValue();
+
+                        dz[0] = d_dz[0].dataValue();
+                        dz[1] = d_dz[1].dataValue();
+                        dz[2] = d_dz[2].dataValue();
+#else
+                        // CPU
+                        bool e0=false, e1=false, e2=false;
+                        for (int k=0;k<=khi+1;++k) {
+                            Real z = z_nd_old(icen,jcen,k);
+                            if(!e0 && z>110.) { k110lo=k-1; z110lo=z_nd_old(icen,jcen,k-1); e0=true; }
+                            if(!e1 && z>300.) { k300lo=k-1; z300lo=z_nd_old(icen,jcen,k-1); e1=true; }
+                            if(!e2 && z>500.) { k500lo=k-1; z500lo=z_nd_old(icen,jcen,k-1); e2=true; }
+                        }
+                        dz[0] = z_nd_old(icen,jcen,k110lo+1) - z110lo;
+                        dz[1] = z_nd_old(icen,jcen,k300lo+1) - z300lo;
+                        dz[2] = z_nd_old(icen,jcen,k500lo+1) - z500lo;
+#endif
+                    }
+
+                } else if (solverChoice.terrain_type == TerrainType::EB) {
+
+                    const Real* dx = fine_geom.CellSize();
+                    // dz.assign(3, dx[2]);
+                    dz[0] = dx[2];
+                    dz[1] = dx[2];
+                    dz[2] = dx[2];
+
+                    k110lo = std::floor(110.0/dz[0] - 0.5); // low index
+                    k300lo = std::floor(300.0/dz[1] - 0.5);
+                    k500lo = std::floor(500.0/dz[2] - 0.5);
+
+                    z110lo = (0.5+k110lo)*dz[0]; // low height
+                    z300lo = (0.5+k300lo)*dz[1];
+                    z500lo = (0.5+k500lo)*dz[2];
+                }
+
+                const int k110hi = k110lo + 1; // high index
+                const int k300hi = k300lo + 1;
+                const int k500hi = k500lo + 1;
+
+                const Real w110hi = (110.0 - z110lo)/dz[0];
+                const Real w300hi = (300.0 - z300lo)/dz[1];
+                const Real w500hi = (500.0 - z500lo)/dz[2];
+
+                const Real w110lo = 1.0 - w110hi;
+                const Real w300lo = 1.0 - w300hi;
+                const Real w500lo = 1.0 - w500hi;
+
+                Vector<Array4<Real>> ssum_h(n_data);
+                for (int i = 0; i < n_data; ++i) {
+                     ssum_h[i] = S_sum[i].array(mfi);
+                }
+                Gpu::AsyncVector<Array4<Real>> ssum_d(n_data);
+                Gpu::copy(Gpu::hostToDevice, ssum_h.begin(), ssum_h.end(), ssum_d.begin());
+                Array4<Real>* ssum = ssum_d.dataPtr();
+
+                Gpu::DeviceScalar<Real> u110_d(0.0);
+                Gpu::DeviceScalar<Real> u300_d(0.0);
+                Gpu::DeviceScalar<Real> u500_d(0.0);
+                Real* u110_d_ptr = u110_d.dataPtr();
+                Real* u300_d_ptr = u300_d.dataPtr();
+                Real* u500_d_ptr = u500_d.dataPtr();
+
+                if (ilo<icen && icen<ihi) {
+                    amrex::ParallelFor(1, [=] AMREX_GPU_DEVICE (int /*dummy*/) {
+
+                        Real u110_lo = ssum[IntVars::xmom](icen,jcen,k110lo) * 2.0 / 
+                                    ( ssum[IntVars::cons](icen  ,jcen,k110lo,Rho_comp) 
+                                    + ssum[IntVars::cons](icen-1,jcen,k110lo,Rho_comp) );
+                        Real u110_hi = ssum[IntVars::xmom](icen,jcen,k110hi) * 2.0 /
+                                    ( ssum[IntVars::cons](icen  ,jcen,k110hi,Rho_comp) 
+                                    + ssum[IntVars::cons](icen-1,jcen,k110hi,Rho_comp) );
+                        Real u110 = w110lo * u110_lo + w110hi * u110_hi;
+
+                        Real u300_lo = ssum[IntVars::xmom](icen,jcen,k300lo) * 2.0 /
+                                    ( ssum[IntVars::cons](icen  ,jcen,k300lo,Rho_comp) 
+                                    + ssum[IntVars::cons](icen-1,jcen,k300lo,Rho_comp) );
+                        Real u300_hi = ssum[IntVars::xmom](icen,jcen,k300hi) * 2.0 /
+                                    ( ssum[IntVars::cons](icen  ,jcen,k300hi,Rho_comp) 
+                                    + ssum[IntVars::cons](icen-1,jcen,k300hi,Rho_comp) );
+                        Real u300 = w300lo * u300_lo + w300hi * u300_hi;
+
+                        Real u500_lo = ssum[IntVars::xmom](icen,jcen,k500lo) * 2.0 /
+                                    ( ssum[IntVars::cons](icen  ,jcen,k500lo,Rho_comp) 
+                                    + ssum[IntVars::cons](icen-1,jcen,k500lo,Rho_comp) );
+                        Real u500_hi = ssum[IntVars::xmom](icen,jcen,k500hi) * 2.0 /
+                                    ( ssum[IntVars::cons](icen  ,jcen,k500hi,Rho_comp) 
+                                    + ssum[IntVars::cons](icen-1,jcen,k500hi,Rho_comp) );
+                        Real u500 = w500lo * u500_lo + w500hi * u500_hi;
+
+                        Gpu::Atomic::Add(u110_d_ptr,u110);
+                        Gpu::Atomic::Add(u300_d_ptr,u300);
+                        Gpu::Atomic::Add(u500_d_ptr,u500);
+                    });                        
+
+                    // copy back to host
+                    Real u110 = u110_d.dataValue();
+                    Real u300 = u300_d.dataValue();
+                    Real u500 = u500_d.dataValue();
+
+                    // Gpu::copy(Gpu::deviceToHost, u110_d.dataPtr(), u110_d.dataPtr()+1, &h_total_power);
+
+                    std::string terrain_type_str;
+                    switch (solverChoice.terrain_type) {
+                        case TerrainType::EB:
+                            terrain_type_str = "EB";
+                            break;
+                        case TerrainType::StaticFittedMesh:
+                            terrain_type_str = "FittedMesh";
+                            break;
+                        default:
+                            terrain_type_str = "unknown";
+                            break;
+                    }
+
+                    std::string filename = "u_values_" + terrain_type_str + ".txt";
+                    static bool first_write = true;
+                    std::ofstream out;
+
+                    if (first_write) {
+                        out.open(filename, std::ios::out); // overwrite (initialize)
+                        first_write = false;
+                    } else {
+                        out.open(filename, std::ios::app); // append mode
+                    }
+                    out << time_for_fp << ", " << u110 << ", " << u300 << ", " << u500 << std::endl;
+                    out.close();
+
+                }
+            } // MFIter
+        } // nrk
+        // SK ********************************************************************************
+
     };
