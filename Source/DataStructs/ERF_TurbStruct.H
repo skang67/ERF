@@ -136,6 +136,12 @@ public:
 #ifndef ERF_USE_SHOC
           amrex::Abort("You set use_shoc to true but didn't build with SHOC; you must rebuild the executable");
 #endif
+          std::string zlo_bc = "none";
+          amrex::ParmParse pp_bc("zlo");
+          pp_bc.get("type",zlo_bc);
+          if (amrex::toLower(zlo_bc) != "surface_layer") {
+               amrex::Abort("You must use the surface_layer BC at zlo with SHOC.");
+          }
       }
     }
 
@@ -189,7 +195,8 @@ public:
     query_one_or_per_level(pp, "theta_ref", theta_ref, lev, max_level);
 
     query_one_or_per_level(pp, "mix_isotropic", mix_isotropic, lev, max_level);
-    query_one_or_per_level(pp, "use_smag_stratification", use_smag_stratification, lev, max_level);
+    query_one_or_per_level(pp, "use_Ri_correction", use_Ri_correction, lev, max_level);
+    query_one_or_per_level(pp, "Ri_crit", Ri_crit, lev, max_level);
 
     // Set common flags
     use_kturb =
@@ -218,6 +225,26 @@ public:
     }
   }
 
+  void check_params (amrex::GpuArray<ERF_BC, AMREX_SPACEDIM*2>& phys_bc_type)
+  {
+      // BC compatibility
+      if ( ( (pbl_type == PBLType::MYNN25)   ||
+             (pbl_type == PBLType::MYNNEDMF) ||
+             (pbl_type == PBLType::YSU) ||
+             (pbl_type == PBLType::MRF)
+                 ) &&
+          phys_bc_type[amrex::Orientation(amrex::Direction::z,amrex::Orientation::low)] != ERF_BC::surface_layer ) {
+          amrex::Abort("MYNN2.5/MYNNEDMF/YSU/MRF PBL Model requires MOST at lower boundary");
+      }
+      if ( (les_type == LESType::Deardorff) && (Ce_wall > 0) &&
+           (phys_bc_type[amrex::Orientation(amrex::Direction::z,amrex::Orientation::low)] != ERF_BC::surface_layer) &&
+           (phys_bc_type[amrex::Orientation(amrex::Direction::z,amrex::Orientation::low)] != ERF_BC::slip_wall) &&
+           (phys_bc_type[amrex::Orientation(amrex::Direction::z,amrex::Orientation::low)] != ERF_BC::no_slip_wall) )
+      {
+          amrex::Warning("Deardorff LES assumes wall at zlo when applying Ce_wall");
+      }
+  }
+
   void display (int lev)
   {
     amrex::Print() << "Turbulence Settings at level " << lev << std::endl;
@@ -232,8 +259,9 @@ public:
       } else {
         amrex::Print() << "    Using Smagorinsky LES model at level " << lev << std::endl;
       }
-      if (use_smag_stratification) {
-        amrex::Print() << "    Smagorinsky accounts for moist stratification" << std::endl;
+      if (use_Ri_correction) {
+        amrex::Print() << "    Smagorinsky uses Richardson number correction with Ri_crit = "
+                       << Ri_crit << std::endl;
       }
     } else if (les_type == LESType::Deardorff) {
       amrex::Print() << "    Using Deardorff LES model at level " << lev << std::endl;
@@ -284,8 +312,7 @@ public:
       }
     }
 
-    if ((les_type  == LESType::Deardorff)                              ||
-        (les_type  == LESType::Smagorinsky && use_smag_stratification) ||
+    if ((les_type  == LESType::Deardorff) ||
         (rans_type == RANSType::kEqn)) {
       if (theta_ref > 0) {
         amrex::Print() << "    reference theta         : " << theta_ref << std::endl;
@@ -373,8 +400,8 @@ public:
   // Anistropic length scales
   bool mix_isotropic = true;
 
-  // Use the stratification adjustment for the Smagorinsky Scheme
-  bool use_smag_stratification = true;
+  bool use_Ri_correction = true;
+  amrex::Real Ri_crit = 0.25;
 
   // RANS type
   RANSType rans_type;

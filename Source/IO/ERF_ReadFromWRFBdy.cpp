@@ -165,7 +165,7 @@ read_from_wrfbdy (const int itime, const std::string& nc_bdy_file, const Box& do
     // This loops over every variable on every face, so nvars should be 4 * number of "ivartype" below
     for (int iv = 0; iv < nvars; iv++)
     {
-        Print() << "Building FAB for the NetCDF variable : " << nc_var_names[iv] << std::endl;
+        // Print() << "Building FAB for the NetCDF variable : " << nc_var_names[iv] << std::endl;
 
         int bdyVarType;
 
@@ -572,7 +572,7 @@ convert_wrfbdy_data (const int itime,
                 Real xmu         = (mu_arr(i,j,0) + mub_arr(i,j,0));
                 Real xmu_mult    = c1h_arr(0,0,k) * xmu + c2h_arr(0,0,k);
                 Real new_bdy_Th  = bdy_t_arr(i,j,k) / xmu_mult + wrf_theta_ref;
-                Real qv_fac      = (1. + bdy_qv_arr(i,j,k) / 0.622 / xmu_mult);
+                Real qv_fac      = (1. + (R_v/R_d) * bdy_qv_arr(i,j,k) / xmu_mult);
                 new_bdy_Th      /= qv_fac;
                 bdy_t_tmp(i,j,k) = new_bdy_Th;
             }

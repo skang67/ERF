@@ -47,12 +47,7 @@ ERF::fill_from_realbdy (const Vector<MultiFab*>& mfs,
     }
 
     // Flags for read vars and index mapping
-    /*
     Vector<int> cons_read = {0, 1, 0, 0,
-                             1, 0, 0,
-                             0, 0, 0};
-    */
-    Vector<int> cons_read = {0, 0, 0, 0,
                              1, 0, 0,
                              0, 0, 0};
 
@@ -198,16 +193,16 @@ ERF::fill_from_realbdy (const Vector<MultiFab*>& mfs,
                     // Grown tilebox so we fill exterior ghost cells as well
                     Box gbx = mfi.growntilebox(ng_vect);
                     Box bx_xlo, bx_xhi, bx_ylo, bx_yhi;
-                    realbdy_bc_bxs_xy(gbx, domain, set_width,
+                    realbdy_bc_bxs_xy(gbx, domain, 1,
                                       bx_xlo, bx_xhi,
                                       bx_ylo, bx_yhi,
                                       ng_vect);
 
                     // Bounding
-                    int i_xlo = bx_xlo.bigEnd(0)   + set_width;
-                    int i_xhi = bx_xhi.smallEnd(0) - set_width;
-                    int j_ylo = bx_ylo.bigEnd(1)   + set_width;
-                    int j_yhi = bx_yhi.smallEnd(1) - set_width;
+                    int i_xlo = bx_xlo.bigEnd(0)   + 1;
+                    int i_xhi = bx_xhi.smallEnd(0) - 1;
+                    int j_ylo = bx_ylo.bigEnd(1)   + 1;
+                    int j_yhi = bx_yhi.smallEnd(1) - 1;
 
                     // Destination array
                     const Array4<Real>& dest_arr = mf.array(mfi);
@@ -216,14 +211,14 @@ ERF::fill_from_realbdy (const Vector<MultiFab*>& mfs,
                     ParallelFor(bx_xlo, bx_xhi,
                     [=] AMREX_GPU_DEVICE (int i, int j, int k)
                     {
-                        int jj = std::max(j , dom_lo.y+set_width);
-                            jj = std::min(jj, dom_hi.y-set_width);
+                        int jj = std::max(j , dom_lo.y);
+                            jj = std::min(jj, dom_hi.y);
                         dest_arr(i,j,k,comp_idx) = dest_arr(i_xlo,jj,k,comp_idx);
                     },
                     [=] AMREX_GPU_DEVICE (int i, int j, int k)
                     {
-                        int jj = std::max(j , dom_lo.y+set_width);
-                            jj = std::min(jj, dom_hi.y-set_width);
+                        int jj = std::max(j , dom_lo.y);
+                            jj = std::min(jj, dom_hi.y);
                         dest_arr(i,j,k,comp_idx) = dest_arr(i_xhi,jj,k,comp_idx);
                     });
 
@@ -380,42 +375,59 @@ ERF::fill_from_realbdy_upwind (const Vector<MultiFab*>& mfs,
                     const Array4<Real>& u_arr = mf_u.array(mfi);
                     const Array4<Real>& v_arr = mf_v.array(mfi);
 
+                    auto lb_u = lbound(u_arr); lb_u.x += ngvect_vels[0]; lb_u.y += ngvect_vels[1];
+                    auto ub_u = ubound(u_arr); ub_u.x -= ngvect_vels[0]; ub_u.y -= ngvect_vels[1];
+                    auto lb_v = lbound(v_arr); lb_v.x += ngvect_vels[0]; lb_v.y += ngvect_vels[1];
+                    auto ub_v = ubound(v_arr); ub_v.x -= ngvect_vels[0]; ub_v.y -= ngvect_vels[1];
+
                     // NOTE: Xlo/hi boxes own corner cells (Ylo/hi)
                     ParallelFor(bx_xlo, bx_xhi,
                     [=] AMREX_GPU_DEVICE (int i, int j, int k)
                     {
+                        // Limit for BDY FAB data
                         int ii = std::max(i , dom_lo.x);
                         int jj = std::max(j , dom_lo.y);
                             jj = std::min(jj, dom_hi.y);
-                        if ( (u_arr(dom_lo.x,jj,k) >= 0.0) ||
-                             ((jj == dom_lo.y) && (v_arr(ii,dom_lo.y  ,k) >= 0.0)) ||
-                             ((jj == dom_hi.y) && (v_arr(ii,dom_hi.y+1,k) <= 0.0)) ) {
+
+                        // Limit for u_arr and v_arr
+                        int ju = std::min(std::max(j, lb_u.y), ub_u.y);
+                        int iv = std::min(std::max(i, lb_v.x), ub_v.x);
+
+                        if ( (u_arr(dom_lo.x,ju,k) >= 0.0) ||
+                             ((jj == dom_lo.y) && (v_arr(iv,dom_lo.y  ,k) >= 0.0)) ||
+                             ((jj == dom_hi.y) && (v_arr(iv,dom_hi.y+1,k) <= 0.0)) ) {
                             dest_arr(i,j,k,comp_idx) = oma   * bdatxlo_n  (ii,jj,k,0)
                                                      + alpha * bdatxlo_np1(ii,jj,k,0);
                             if (var_idx == Vars::cons) {
                                 dest_arr(i,j,k,comp_idx) *= dest_arr(i,j,k,Rho_comp);
                             }
                         } else {
-                            dest_arr(i,j,k,comp_idx) = dest_arr(dom_lo.x,j,k,comp_idx);
+                            dest_arr(i,j,k,comp_idx) = dest_arr(dom_lo.x,jj,k,comp_idx);
                         }
                     },
                     [=] AMREX_GPU_DEVICE (int i, int j, int k)
                     {
+                        // Limit for BDY FAB data
                         int ii = std::min(i , dom_hi.x);
                         int jj = std::max(j , dom_lo.y);
                             jj = std::min(jj, dom_hi.y);
-                        if ( (u_arr(dom_hi.x+1,jj,k) <= 0.0) ||
-                             ((jj == dom_lo.y) && (v_arr(ii,dom_lo.y  ,k) >= 0.0)) ||
-                             ((jj == dom_hi.y) && (v_arr(ii,dom_hi.y+1,k) <= 0.0)) ) {
+
+                        // Limit for u_arr and v_arr
+                        int ju = std::min(std::max(j, lb_u.y), ub_u.y);
+                        int iv = std::min(std::max(i, lb_v.x), ub_v.x);
+
+                        if ( (u_arr(dom_hi.x+1,ju,k) <= 0.0) ||
+                             ((jj == dom_lo.y) && (v_arr(iv,dom_lo.y  ,k) >= 0.0)) ||
+                             ((jj == dom_hi.y) && (v_arr(iv,dom_hi.y+1,k) <= 0.0)) ) {
                             dest_arr(i,j,k,comp_idx) = oma   * bdatxhi_n  (ii,jj,k,0)
                                                      + alpha * bdatxhi_np1(ii,jj,k,0);
                             if (var_idx == Vars::cons) {
                                 dest_arr(i,j,k,comp_idx) *= dest_arr(i,j,k,Rho_comp);
                             }
                         } else if (var_idx == Vars::xvel) {
-                            dest_arr(i,j,k,comp_idx) = dest_arr(dom_hi.x+1,j,k,comp_idx);
+                            dest_arr(i,j,k,comp_idx) = dest_arr(dom_hi.x+1,jj,k,comp_idx);
                         } else {
-                            dest_arr(i,j,k,comp_idx) = dest_arr(dom_hi.x,j,k,comp_idx);
+                            dest_arr(i,j,k,comp_idx) = dest_arr(dom_hi.x,jj,k,comp_idx);
                         }
                     });
 
@@ -423,8 +435,13 @@ ERF::fill_from_realbdy_upwind (const Vector<MultiFab*>& mfs,
                     ParallelFor(bx_ylo, bx_yhi,
                     [=] AMREX_GPU_DEVICE (int i, int j, int k)
                     {
+                        // Limit for BDY FAB data
                         int jj = std::max(j, dom_lo.y);
-                        if (v_arr(i,dom_lo.y,k) >= 0.0) {
+
+                        // Limit for v_arr
+                        int iv = std::min(std::max(i, lb_v.x), ub_v.x);
+
+                        if (v_arr(iv,dom_lo.y,k) >= 0.0) {
                             dest_arr(i,j,k,comp_idx) = oma   * bdatylo_n  (i,jj,k,0)
                                                      + alpha * bdatylo_np1(i,jj,k,0);
                             if (var_idx == Vars::cons) {
@@ -436,8 +453,13 @@ ERF::fill_from_realbdy_upwind (const Vector<MultiFab*>& mfs,
                     },
                     [=] AMREX_GPU_DEVICE (int i, int j, int k)
                     {
+                        // Limit for BDY FAB data
                         int jj = std::min(j, dom_hi.y);
-                        if (v_arr(i,dom_hi.y+1,k) <= 0.0) {
+
+                        // Limit for v_arr
+                        int iv = std::min(std::max(i, lb_v.x), ub_v.x);
+
+                        if (v_arr(iv,dom_hi.y+1,k) <= 0.0) {
                             dest_arr(i,j,k,comp_idx) = oma   * bdatyhi_n  (i,jj,k,0)
                                                      + alpha * bdatyhi_np1(i,jj,k,0);
                             if (var_idx == Vars::cons) {
@@ -463,16 +485,16 @@ ERF::fill_from_realbdy_upwind (const Vector<MultiFab*>& mfs,
                     // Grown tilebox so we fill exterior ghost cells as well
                     Box gbx = mfi.growntilebox(ng_vect);
                     Box bx_xlo, bx_xhi, bx_ylo, bx_yhi;
-                    realbdy_bc_bxs_xy(gbx, domain, set_width,
+                    realbdy_bc_bxs_xy(gbx, domain, 1,
                                       bx_xlo, bx_xhi,
                                       bx_ylo, bx_yhi,
                                       ng_vect);
 
                     // Bounding
-                    int i_xlo = bx_xlo.bigEnd(0)   + set_width;
-                    int i_xhi = bx_xhi.smallEnd(0) - set_width;
-                    int j_ylo = bx_ylo.bigEnd(1)   + set_width;
-                    int j_yhi = bx_yhi.smallEnd(1) - set_width;
+                    int i_xlo = bx_xlo.bigEnd(0);
+                    int i_xhi = bx_xhi.smallEnd(0);
+                    int j_ylo = bx_ylo.bigEnd(1);
+                    int j_yhi = bx_yhi.smallEnd(1);
 
                     // Destination array
                     const Array4<Real>& dest_arr = mf.array(mfi);
@@ -481,14 +503,14 @@ ERF::fill_from_realbdy_upwind (const Vector<MultiFab*>& mfs,
                     ParallelFor(bx_xlo, bx_xhi,
                     [=] AMREX_GPU_DEVICE (int i, int j, int k)
                     {
-                        int jj = std::max(j , dom_lo.y+set_width);
-                            jj = std::min(jj, dom_hi.y-set_width);
+                        int jj = std::max(j , dom_lo.y);
+                            jj = std::min(jj, dom_hi.y);
                         dest_arr(i,j,k,comp_idx) = dest_arr(i_xlo,jj,k,comp_idx);
                     },
                     [=] AMREX_GPU_DEVICE (int i, int j, int k)
                     {
-                        int jj = std::max(j , dom_lo.y+set_width);
-                            jj = std::min(jj, dom_hi.y-set_width);
+                        int jj = std::max(j , dom_lo.y);
+                            jj = std::min(jj, dom_hi.y);
                         dest_arr(i,j,k,comp_idx) = dest_arr(i_xhi,jj,k,comp_idx);
                     });
 
