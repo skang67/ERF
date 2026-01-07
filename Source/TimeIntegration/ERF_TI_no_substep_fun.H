@@ -311,7 +311,11 @@
 
 
         // SK ********************************************************************************
-        if ( ( std::fmod(time_for_fp, 5.0) < slow_dt ) &&nrk == 2) {
+        int nrk_print = 2;
+        if (solverChoice.anelastic[level]) {
+            nrk_print = 1;
+        }
+        if ( ( std::fmod(time_for_fp, 5.0) < slow_dt ) &&nrk == nrk_print) {
         // if ( nrk == 2) {
             for ( MFIter mfi(S_sum[IntVars::cons],TilingIfNotGPU()); mfi.isValid(); ++mfi)
             {
