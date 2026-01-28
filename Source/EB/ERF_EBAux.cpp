@@ -885,7 +885,7 @@ define( [[maybe_unused]] int const& a_level,
               (i == xbx_hi && aux_vfrac(i-1,j,k) < small_volfrac) ||
               (i != xbx_lo && i != xbx_hi)) {
               aux_afrac_x(i,j,k) = 0.0;
-          }          
+          }
         }
       });
 
