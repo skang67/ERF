@@ -7,6 +7,7 @@
 #include <AMReX_EBMultiFabUtil.H>
 
 #include "ERF_DataStruct.H"
+#include <ERF_EB.H>
 #include "ERF_IndexDefines.H"
 #include <ERF_TerrainMetrics.H>
 #include <ERF_TileNoZ.H>
@@ -137,6 +138,7 @@ void make_fast_coeffs (int level,
                        const amrex::MultiFab* pi0,
                        const amrex::Real dtau,
                        const amrex::Real beta_s,
-                       amrex::GpuArray<ERF_BC, AMREX_SPACEDIM*2> &phys_bc_type);
+                       amrex::GpuArray<ERF_BC, AMREX_SPACEDIM*2> &phys_bc_type,
+                       const eb_* p_ebfact = nullptr);
 
 #endif

@@ -1,6 +1,6 @@
 #include <AMReX.H>
-
 #include <ERF_TI_fast_headers.H>
+#include <ERF_EB.H>
 
 using namespace amrex;
 
@@ -35,7 +35,8 @@ void make_fast_coeffs (int /*level*/,
                        std::unique_ptr<MultiFab>& detJ_cc,
                        const MultiFab* r0, const MultiFab* pi0,
                        Real dtau, Real beta_s,
-                       amrex::GpuArray<ERF_BC, AMREX_SPACEDIM*2> &phys_bc_type)
+                       amrex::GpuArray<ERF_BC, AMREX_SPACEDIM*2> &phys_bc_type,
+                       const eb_* p_ebfact)
 {
     BL_PROFILE_VAR("make_fast_coeffs()",make_fast_coeffs);
 
@@ -160,8 +161,24 @@ void make_fast_coeffs (int /*level*/,
 
         } else {
 
+            // EB: fetch z-face cell flags if an EB factory was provided
+            bool l_use_eb = (p_ebfact != nullptr);
+            const Array4<const EBCellFlag> flag_w_arr = l_use_eb ?
+                p_ebfact->get_w_const_factory()->getMultiEBCellFlagFab()[mfi].const_array()
+                : Array4<const EBCellFlag>{};
+
             ParallelFor(bx_shrunk_in_k, [=] AMREX_GPU_DEVICE (int i, int j, int k)
             {
+                // EB: covered z-face → identity row (A=0, B=1, C=0, P=0, Q=0)
+                //     so the tridiagonal solver gives w=0 at covered faces.
+                if (l_use_eb && flag_w_arr(i,j,k).isCovered()) {
+                    coeffA_a(i,j,k) = zero;
+                    coeffB_a(i,j,k) = one;
+                    coeffC_a(i,j,k) = zero;
+                    coeffP_a(i,j,k) = zero;
+                    coeffQ_a(i,j,k) = zero;
+                    return;
+                }
                 Real rhobar_lo, rhobar_hi, pibar_lo, pibar_hi;
                 rhobar_lo =  r0_ca(i,j,k-1);
                 rhobar_hi =  r0_ca(i,j,k  );
