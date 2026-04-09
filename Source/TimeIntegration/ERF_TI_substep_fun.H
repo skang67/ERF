@@ -1,4 +1,5 @@
 #include "ERF_SrcHeaders.H"
+#include <ERF_EBRedistribute.H>
 
 /**
  *  Wrapper for calling the routine that creates the fast RHS
@@ -120,9 +121,10 @@ auto acoustic_substepping_fun = [&](int fast_step, int n_sub, int nrk,
 
         if ( (fast_step == 0) || (solverChoice.terrain_type == TerrainType::MovingFittedMesh) )
         {
+            const eb_* l_ebfact_ptr = (solverChoice.terrain_type == TerrainType::EB) ? &get_eb(level) : nullptr;
             make_fast_coeffs(level, fast_coeffs, S_stage, S_prim, pi_stage, fine_geom,
                              l_use_moisture, SolverChoice::mesh_type, solverChoice.gravity, solverChoice.c_p,
-                             detJ_cc[level], r0, pi0, dtau, beta_s, phys_bc_type);
+                             detJ_cc[level], r0, pi0, dtau, beta_s, phys_bc_type, l_ebfact_ptr);
         }
 
         bool l_rayleigh_implicit = (solverChoice.dampingChoice.rayleigh_damping_type == RayleighDampingType::FastImplicit);
@@ -153,6 +155,43 @@ auto acoustic_substepping_fun = [&](int fast_step, int n_sub, int nrk,
                           mapfac[level],
                           fr_as_crse, fr_as_fine, l_use_moisture, l_reflux,
                           (l_rayleigh_implicit) ? d_sinesq_ptrs[level].data() : nullptr, l_damp_coef);
+
+        } else if (solverChoice.terrain_type == TerrainType::EB) {
+
+            // Save pre-substep fast vars for redistribution.
+            // For fast_step > 0, Svec_to_use aliases S_data (same data), so we always copy
+            // to ensure stable pre-substep reference for computing the per-substep increment.
+            const BoxArray&            ba_c = S_data[IntVars::cons].boxArray();
+            const BoxArray&            ba_u = S_data[IntVars::xmom].boxArray();
+            const BoxArray&            ba_v = S_data[IntVars::ymom].boxArray();
+            const BoxArray&            ba_w = S_data[IntVars::zmom].boxArray();
+            const DistributionMapping& dm   = S_data[IntVars::cons].DistributionMap();
+            const IntVect ngv_c = S_data[IntVars::cons].nGrowVect();
+            const IntVect ngv_u = S_data[IntVars::xmom].nGrowVect();
+            const IntVect ngv_v = S_data[IntVars::ymom].nGrowVect();
+            const IntVect ngv_w = S_data[IntVars::zmom].nGrowVect();
+            const int ncomp_fast_c = 2; // rho + rho_theta
+
+            MultiFab S_prev_cons(ba_c, dm, ncomp_fast_c, ngv_c, MFInfo(), EBFactory(level));
+            MultiFab S_prev_xmom(ba_u, dm, 1, ngv_u);
+            MultiFab S_prev_ymom(ba_v, dm, 1, ngv_v);
+            MultiFab S_prev_zmom(ba_w, dm, 1, ngv_w);
+            MultiFab::Copy(S_prev_cons, Svec_to_use[IntVars::cons], 0, 0, ncomp_fast_c, ngv_c);
+            MultiFab::Copy(S_prev_xmom, Svec_to_use[IntVars::xmom], 0, 0, 1, ngv_u);
+            MultiFab::Copy(S_prev_ymom, Svec_to_use[IntVars::ymom], 0, 0, 1, ngv_v);
+            MultiFab::Copy(S_prev_zmom, Svec_to_use[IntVars::zmom], 0, 0, 1, ngv_w);
+
+            erf_substep_EB(fast_step, nrk, level, finest_level,
+                           S_slow_rhs, Svec_to_use, S_stage, S_prim, qt, pi_stage, fast_coeffs,
+                           S_data, lagged_delta_rt[level], avg_xmom[level], avg_ymom[level], avg_zmom[level],
+                           cc_src, xmom_src, ymom_src, zmom_src,
+                           fine_geom, solverChoice.gravity, stretched_dz_d[level],
+                           dtau, beta_s, inv_fac, mapfac[level],
+                           fr_as_crse, fr_as_fine, l_use_moisture, l_reflux,
+                           (l_rayleigh_implicit) ? d_sinesq_ptrs[level].data() : nullptr, l_damp_coef,
+                           get_eb(level));
+
+            // Need to call redistribution here.
 
         } else {
 
