@@ -416,7 +416,7 @@ void erf_substep_NS (int step, int nrk,
             // lines 3-5 residuals (order dtau^2) one <-> beta_2
             Real R1_tmp =  halfg * (-slow_rhs_cons(i,j,k  ,Rho_comp)
                                     -slow_rhs_cons(i,j,k-1,Rho_comp)
-                                    +temp_rhs_arr(i,j,k,0) + temp_rhs_arr(i,j,k-1) )
+                                    +temp_rhs_arr(i,j,k,Rho_comp) + temp_rhs_arr(i,j,k-1,Rho_comp) )
                 + ( coeff_P * (slow_rhs_cons(i,j,k  ,RhoTheta_comp) - temp_rhs_arr(i,j,k  ,RhoTheta_comp)) +
                     coeff_Q * (slow_rhs_cons(i,j,k-1,RhoTheta_comp) - temp_rhs_arr(i,j,k-1,RhoTheta_comp)) );
 
