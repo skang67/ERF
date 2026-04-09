@@ -369,6 +369,8 @@ ERF::ERF_shared ()
     SFS_q2fx3_lev.resize(nlevs_max);
     eddyDiffs_lev.resize(nlevs_max);
     SmnSmn_lev.resize(nlevs_max);
+    Tau_EB.resize(nlevs_max);
+    hfx3_EB.resize(nlevs_max);
 
     // Sea surface temps
     sst_lev.resize(nlevs_max);
@@ -538,7 +540,7 @@ ERF::ERF_shared ()
             RealArray plane_normal{zero, zero, -one}; // pointing into the solid region
             pp_eb2.query("plane_point", plane_point);
             pp_eb2.query("plane_normal", plane_normal);
-            EB2::PlaneIF implicit_fun(plane_point, plane_normal, false);
+            EB2::PlaneIF implicit_fun(plane_point, plane_normal, true);
             auto gshop = EB2::makeShop(implicit_fun);
             if (build_eb_for_multigrid) {
                 EB2::Build(gshop, geom[max_level], max_level, max_coarsening_level,
