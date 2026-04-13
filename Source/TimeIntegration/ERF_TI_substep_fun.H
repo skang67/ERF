@@ -173,14 +173,15 @@ auto acoustic_substepping_fun = [&](int fast_step, int n_sub, int nrk,
             const IntVect ngv_w = S_data[IntVars::zmom].nGrowVect();
             const int ncomp_fast_c = 2; // rho + rho_theta
 
-            MultiFab S_prev_cons(ba_c, dm, ncomp_fast_c, ngv_c, MFInfo(), EBFactory(level));
-            MultiFab S_prev_xmom(ba_u, dm, 1, ngv_u);
-            MultiFab S_prev_ymom(ba_v, dm, 1, ngv_v);
-            MultiFab S_prev_zmom(ba_w, dm, 1, ngv_w);
-            MultiFab::Copy(S_prev_cons, Svec_to_use[IntVars::cons], 0, 0, ncomp_fast_c, ngv_c);
-            MultiFab::Copy(S_prev_xmom, Svec_to_use[IntVars::xmom], 0, 0, 1, ngv_u);
-            MultiFab::Copy(S_prev_ymom, Svec_to_use[IntVars::ymom], 0, 0, 1, ngv_v);
-            MultiFab::Copy(S_prev_zmom, Svec_to_use[IntVars::zmom], 0, 0, 1, ngv_w);
+            // This will be needed for redistribution.
+            // MultiFab S_prev_cons(ba_c, dm, ncomp_fast_c, ngv_c, MFInfo(), EBFactory(level));
+            // MultiFab S_prev_xmom(ba_u, dm, 1, ngv_u);
+            // MultiFab S_prev_ymom(ba_v, dm, 1, ngv_v);
+            // MultiFab S_prev_zmom(ba_w, dm, 1, ngv_w);
+            // MultiFab::Copy(S_prev_cons, Svec_to_use[IntVars::cons], 0, 0, ncomp_fast_c, ngv_c);
+            // MultiFab::Copy(S_prev_xmom, Svec_to_use[IntVars::xmom], 0, 0, 1, ngv_u);
+            // MultiFab::Copy(S_prev_ymom, Svec_to_use[IntVars::ymom], 0, 0, 1, ngv_v);
+            // MultiFab::Copy(S_prev_zmom, Svec_to_use[IntVars::zmom], 0, 0, 1, ngv_w);
 
             erf_substep_EB(fast_step, nrk, level, finest_level,
                            S_slow_rhs, Svec_to_use, S_stage, S_prim, qt, pi_stage, fast_coeffs,
