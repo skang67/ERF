@@ -173,7 +173,24 @@ void make_fast_coeffs (int level,
                        const amrex::MultiFab* pi0,
                        const amrex::Real dtau,
                        const amrex::Real beta_s,
-                       amrex::GpuArray<ERF_BC, AMREX_SPACEDIM*2> &phys_bc_type,
-                       const eb_* p_ebfact = nullptr);
+                       amrex::GpuArray<ERF_BC, AMREX_SPACEDIM*2> &phys_bc_type);
+
+/**
+ * Function for computing the tridiagonal solver coefficients for EB (terrain-only).
+ * EB uses constant dz; covered z-faces get identity rows (A=0, B=1, C=0).
+ */
+void make_fast_coeffs_EB (int level,
+                          amrex::MultiFab& fast_coeffs,
+                          amrex::Vector<amrex::MultiFab>& S_stage_data,
+                          const amrex::MultiFab& S_stage_prim,
+                          const amrex::MultiFab& pi_stage,
+                          const amrex::Geometry geom,
+                          bool use_moisture,
+                          amrex::Real gravity, amrex::Real c_p,
+                          const amrex::MultiFab* r0,
+                          const amrex::MultiFab* pi0,
+                          amrex::Real dtau, amrex::Real beta_s,
+                          amrex::GpuArray<ERF_BC, AMREX_SPACEDIM*2>& phys_bc_type,
+                          const eb_& ebfact);
 
 #endif

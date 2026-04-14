@@ -1,0 +1,265 @@
+#include <AMReX.H>
+#include <ERF_TI_fast_headers.H>
+#include <ERF_EB.H>
+
+using namespace amrex;
+
+/**
+ * Function for computing the coefficients for the tridiagonal solver used in the fast
+ * integrator (the acoustic substepping) for the EB (terrain-only) case.
+ *
+ * Covered z-faces get identity rows (A=0, B=1, C=0, P=0, Q=0).
+ * The LU factorization sweeps only from the first uncovered w-face per column.
+ *
+ * @param[in]  level level of refinement
+ * @param[out] fast_coeffs  the coefficients for the tridiagonal solver computed here
+ * @param[in]  S_stage_data solution at the last stage
+ * @param[in]  S_stage_prim primitive variables at the last stage
+ * @param[in]  pi_stage Exner function evaluated at the last stage
+ * @param[in]  geom   Container for geometric information
+ * @param[in]  gravity       Magnitude of gravity
+ * @param[in]  c_p           Coefficient at constant pressure
+ * @param[in]  r0            Reference (hydrostatically stratified) density
+ * @param[in]  pi0           Reference (hydrostatically stratified) Exner function
+ * @param[in]  dtau          Fast time step
+ * @param[in]  beta_s        Coefficient which determines how implicit vs explicit the solve is
+ * @param[in]  ebfact        EB factory providing cell flags and k_terrain
+ */
+
+void make_fast_coeffs_EB (int /*level*/,
+                          MultiFab& fast_coeffs,
+                          Vector<MultiFab>& S_stage_data,
+                          const MultiFab& S_stage_prim,
+                          const MultiFab& pi_stage,
+                          const amrex::Geometry geom,
+                          bool l_use_moisture,
+                          Real gravity, Real c_p,
+                          const MultiFab* r0, const MultiFab* pi0,
+                          Real dtau, Real beta_s,
+                          amrex::GpuArray<ERF_BC, AMREX_SPACEDIM*2>& phys_bc_type,
+                          const eb_& ebfact)
+{
+    BL_PROFILE_VAR("make_fast_coeffs_EB()",make_fast_coeffs_EB);
+
+    Real beta_2 = myhalf * (one + beta_s);  // multiplies implicit terms
+
+    Real c_v = c_p - R_d;
+    Real RvOverRd = R_v / R_d;
+
+    const GpuArray<Real, AMREX_SPACEDIM> dxInv = geom.InvCellSizeArray();
+    Real dzi = dxInv[2];
+
+    const Box& domain = geom.Domain();
+
+    MultiFab coeff_A_mf(fast_coeffs, amrex::make_alias, 0, 1);
+    MultiFab coeff_B_mf(fast_coeffs, amrex::make_alias, 1, 1);
+    MultiFab coeff_C_mf(fast_coeffs, amrex::make_alias, 2, 1);
+    MultiFab coeff_P_mf(fast_coeffs, amrex::make_alias, 3, 1);
+    MultiFab coeff_Q_mf(fast_coeffs, amrex::make_alias, 4, 1);
+
+    // *************************************************************************
+    // Set gravity as a vector
+    const    Array<Real,AMREX_SPACEDIM> grav{zero, zero, -gravity};
+    const GpuArray<Real,AMREX_SPACEDIM> grav_gpu{grav[0], grav[1], grav[2]};
+
+    // *************************************************************************
+    // Define updates in the current RK stage
+    // *************************************************************************
+#ifdef _OPENMP
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
+#endif
+    {
+
+    for ( MFIter mfi(S_stage_data[IntVars::cons],TileNoZ()); mfi.isValid(); ++mfi)
+    {
+        Box bx  = mfi.tilebox();
+        Box tbz = surroundingNodes(bx,2);
+
+        const Array4<const Real>& stage_cons  = S_stage_data[IntVars::cons].const_array(mfi);
+        const Array4<const Real>& prim        = S_stage_prim.const_array(mfi);
+        const Array4<const Real>& r0_ca       = r0->const_array(mfi);
+        const Array4<const Real>& pi0_ca      = pi0->const_array(mfi);
+        const Array4<const Real>& pi_stage_ca = pi_stage.const_array(mfi);
+
+        const Array4<const EBCellFlag> flag_w_arr =
+            ebfact.get_w_const_factory()->getMultiEBCellFlagFab()[mfi].const_array();
+        const Array4<const int> k_terr = ebfact.get_k_terrain().const_array(mfi);
+
+        FArrayBox gam_fab; gam_fab.resize(surroundingNodes(bx,2),1,The_Async_Arena());
+
+        auto const& coeffA_a = coeff_A_mf.array(mfi);
+        auto const& coeffB_a = coeff_B_mf.array(mfi);
+        auto const& coeffC_a = coeff_C_mf.array(mfi);
+        auto const& coeffP_a = coeff_P_mf.array(mfi);
+        auto const& coeffQ_a = coeff_Q_mf.array(mfi);
+        auto const& gam_a    = gam_fab.array();
+
+        // *********************************************************************
+
+        Box bx_shrunk_in_k = bx;
+        int klo = tbz.smallEnd(2);
+        int khi = tbz.bigEnd(2);
+        bx_shrunk_in_k.setSmall(2,klo+1);
+        bx_shrunk_in_k.setBig(2,khi-1);
+
+        // Note that the notes use "g" to mean the magnitude of gravity, so it is positive
+        // We set grav_gpu[2] to be the vector component which is negative
+        // We define halfg to match the notes (which is why we take the absolute value)
+        Real halfg = std::abs(myhalf * grav_gpu[2]);
+
+        // ---- Compute A, B, C, P, Q coefficients ----
+        // Covered z-faces get identity rows; uncovered faces use EB formulas
+        // Note: EB is always constant dz (no detJ)
+
+        ParallelFor(bx_shrunk_in_k, [=] AMREX_GPU_DEVICE (int i, int j, int k)
+        {
+            // Covered z-face → identity row so the tridiagonal solver gives W=0
+            if (flag_w_arr(i,j,k).isCovered()) {
+                coeffA_a(i,j,k) = zero;
+                coeffB_a(i,j,k) = one;
+                coeffC_a(i,j,k) = zero;
+                coeffP_a(i,j,k) = zero;
+                coeffQ_a(i,j,k) = zero;
+                return;
+            }
+
+            Real rhobar_lo =  r0_ca(i,j,k-1);
+            Real rhobar_hi =  r0_ca(i,j,k  );
+            Real pibar_lo  = pi0_ca(i,j,k-1);
+            Real pibar_hi  = pi0_ca(i,j,k  );
+
+            Real pi_c = myhalf * (pi_stage_ca(i,j,k-1) + pi_stage_ca(i,j,k));
+
+            Real qv_p = (l_use_moisture) ? prim(i,j,k  ,PrimQ1_comp) : zero;
+            Real qv_q = (l_use_moisture) ? prim(i,j,k-1,PrimQ1_comp) : zero;
+
+            // TODO: replace with EB-specific coefficient formulas
+            Real coeff_P = -Gamma * R_d * dzi * pi_c * (one + RvOverRd*qv_p)
+                        +  halfg * R_d * rhobar_hi * pi_stage_ca(i,j,k) /
+                        (  c_v * pibar_hi * stage_cons(i,j,k,RhoTheta_comp) );
+
+            Real coeff_Q = Gamma * R_d * dzi * pi_c * (one + RvOverRd*qv_q)
+                        + halfg * R_d * rhobar_lo * pi_stage_ca(i,j,k-1) /
+                        ( c_v  * pibar_lo * stage_cons(i,j,k-1,RhoTheta_comp) );
+
+            coeffP_a(i,j,k) = coeff_P;
+            coeffQ_a(i,j,k) = coeff_Q;
+
+            if (l_use_moisture) {
+                Real q = myhalf * ( prim(i,j,k,PrimQ1_comp) + prim(i,j,k-1,PrimQ1_comp)
+                                  + prim(i,j,k,PrimQ2_comp) + prim(i,j,k-1,PrimQ2_comp) );
+                coeff_P /= (one + q);
+                coeff_Q /= (one + q);
+            }
+
+            Real theta_t_lo  = myhalf * ( prim(i,j,k-2,PrimTheta_comp) + prim(i,j,k-1,PrimTheta_comp) );
+            Real theta_t_mid = myhalf * ( prim(i,j,k-1,PrimTheta_comp) + prim(i,j,k  ,PrimTheta_comp) );
+            Real theta_t_hi  = myhalf * ( prim(i,j,k  ,PrimTheta_comp) + prim(i,j,k+1,PrimTheta_comp) );
+
+            // TODO: replace with EB-specific A, B, C formulas
+            Real D = dtau * dtau * beta_2 * beta_2 * dzi;
+            coeffA_a(i,j,k) = D * ( halfg - coeff_Q * theta_t_lo );
+            coeffC_a(i,j,k) = D * (-halfg + coeff_P * theta_t_hi );
+
+            coeffB_a(i,j,k) = one + D * (coeff_Q - coeff_P) * theta_t_mid;
+        });
+
+        // ---- LU factorization (variable-length per column) ----
+        amrex::Box b2d = tbz; // Copy constructor
+        b2d.setRange(2,0);
+
+        auto const lo = amrex::lbound(bx);
+        auto const hi = amrex::ubound(bx);
+
+        auto const domhi = amrex::ubound(domain);
+
+        {
+        BL_PROFILE("make_coeffs_EB_b2d_loop");
+
+#ifdef AMREX_USE_GPU
+        ParallelFor(b2d, [=] AMREX_GPU_DEVICE (int i, int j, int) {
+
+          // Bottom boundary: Dirichlet
+          coeffA_a(i,j,lo.z) = zero;
+          coeffB_a(i,j,lo.z) = one;
+          coeffC_a(i,j,lo.z) = zero;
+
+          // Top boundary: Dirichlet
+          coeffA_a(i,j,hi.z+1) = zero;
+          coeffB_a(i,j,hi.z+1) = one;
+          coeffC_a(i,j,hi.z+1) = zero;
+
+          // UNLESS if at the top of the domain and the boundary is outflow,
+          //     we will use a homogeneous Neumann condition
+          if ( (hi.z == domhi.z) &&
+               (phys_bc_type[5] == ERF_BC::outflow or phys_bc_type[5] == ERF_BC::ho_outflow) )
+          {
+              coeffA_a(i,j,hi.z+1) = -one;
+          }
+
+          // Start LU sweep from first uncovered w-face
+          int k_start = k_terr(i,j,lo.z);
+          Real bet = coeffB_a(i,j,k_start);
+
+          for (int k = k_start+1; k <= hi.z+1; k++) {
+              gam_a(i,j,k) = coeffC_a(i,j,k-1) / bet;
+              bet = coeffB_a(i,j,k) - coeffA_a(i,j,k)*gam_a(i,j,k);
+              coeffB_a(i,j,k) = bet;
+          }
+        });
+#else
+        // Bottom boundary: Dirichlet
+        for (int j = lo.y; j <= hi.y; ++j) {
+            AMREX_PRAGMA_SIMD
+            for (int i = lo.x; i <= hi.x; ++i) {
+                coeffA_a(i,j,lo.z) = zero;
+                coeffB_a(i,j,lo.z) = one;
+                coeffC_a(i,j,lo.z) = zero;
+            }
+        }
+        // Top boundary: Dirichlet (+ Neumann override for outflow)
+        for (int j = lo.y; j <= hi.y; ++j) {
+            AMREX_PRAGMA_SIMD
+            for (int i = lo.x; i <= hi.x; ++i) {
+                coeffA_a(i,j,hi.z+1) = zero;
+                coeffB_a(i,j,hi.z+1) = one;
+                coeffC_a(i,j,hi.z+1) = zero;
+
+                if ( (hi.z == domhi.z) &&
+                     (phys_bc_type[5] == ERF_BC::outflow or phys_bc_type[5] == ERF_BC::ho_outflow) )
+                {
+                    coeffA_a(i,j,hi.z+1) = -one;
+                }
+            }
+        }
+        // Tile-wide k_min for SIMD-friendly LU sweep
+        int k_min = hi.z + 2;
+        for (int j = lo.y; j <= hi.y; ++j) {
+            for (int i = lo.x; i <= hi.x; ++i) {
+                k_min = std::min(k_min, k_terr(i,j,lo.z));
+            }
+        }
+        for (int k = k_min+1; k <= hi.z+1; ++k) {
+            for (int j = lo.y; j <= hi.y; ++j) {
+                AMREX_PRAGMA_SIMD
+                for (int i = lo.x; i <= hi.x; ++i) {
+                    gam_a(i,j,k) = coeffC_a(i,j,k-1) / coeffB_a(i,j,k-1);
+                    Real bet = coeffB_a(i,j,k) - coeffA_a(i,j,k)*gam_a(i,j,k);
+                    coeffB_a(i,j,k) = bet;
+                }
+            }
+        }
+#endif
+        } // end profile
+
+        // In the end we save the inverse of the diagonal (B) coefficient
+        {
+        BL_PROFILE("make_coeffs_EB_invert");
+            ParallelFor(bx_shrunk_in_k, [=] AMREX_GPU_DEVICE (int i, int j, int k)
+            {
+                coeffB_a(i,j,k) = one / coeffB_a(i,j,k);
+            });
+        } // end profile
+    } // mfi
+    } // omp
+}

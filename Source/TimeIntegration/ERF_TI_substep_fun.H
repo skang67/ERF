@@ -121,10 +121,15 @@ auto acoustic_substepping_fun = [&](int fast_step, int n_sub, int nrk,
 
         if ( (fast_step == 0) || (solverChoice.terrain_type == TerrainType::MovingFittedMesh) )
         {
-            const eb_* l_ebfact_ptr = (solverChoice.terrain_type == TerrainType::EB) ? &get_eb(level) : nullptr;
-            make_fast_coeffs(level, fast_coeffs, S_stage, S_prim, pi_stage, fine_geom,
-                             l_use_moisture, SolverChoice::mesh_type, solverChoice.gravity, solverChoice.c_p,
-                             detJ_cc[level], r0, pi0, dtau, beta_s, phys_bc_type, l_ebfact_ptr);
+            if (solverChoice.terrain_type == TerrainType::EB) {
+                make_fast_coeffs_EB(level, fast_coeffs, S_stage, S_prim, pi_stage, fine_geom,
+                                    l_use_moisture, solverChoice.gravity, solverChoice.c_p,
+                                    r0, pi0, dtau, beta_s, phys_bc_type, get_eb(level));
+            } else {
+                make_fast_coeffs(level, fast_coeffs, S_stage, S_prim, pi_stage, fine_geom,
+                                 l_use_moisture, SolverChoice::mesh_type, solverChoice.gravity, solverChoice.c_p,
+                                 detJ_cc[level], r0, pi0, dtau, beta_s, phys_bc_type);
+            }
         }
 
         bool l_rayleigh_implicit = (solverChoice.dampingChoice.rayleigh_damping_type == RayleighDampingType::FastImplicit);

@@ -389,6 +389,7 @@ function(build_erf_lib erf_lib_name)
        ${SRC_DIR}/TimeIntegration/ERF_AdvanceLSM.cpp
        ${SRC_DIR}/TimeIntegration/ERF_AdvanceRadiation.cpp
        ${SRC_DIR}/TimeIntegration/ERF_MakeFastCoeffs.cpp
+       ${SRC_DIR}/TimeIntegration/ERF_MakeFastCoeffs_EB.cpp
        ${SRC_DIR}/TimeIntegration/ERF_MakeTauTerms.cpp
        ${SRC_DIR}/TimeIntegration/ERF_SlowRhsPre.cpp
        ${SRC_DIR}/TimeIntegration/ERF_SlowRhsPost.cpp
