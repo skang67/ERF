@@ -396,10 +396,12 @@ void erf_substep_EB (int step, int nrk,
         const Array4<const EBCellFlag>& flag_w = (ebfact.get_w_const_factory())->getMultiEBCellFlagFab()[mfi].const_array();
         const Array4<const Real> vfrac_w = (ebfact.get_w_const_factory())->getVolFrac().const_array(mfi);
 
-        // This is MultiCutFab, so
+        // Per-column first uncovered w-face index (terrain-only EB)
+        const Array4<const int> k_terr = ebfact.get_k_terrain().const_array(mfi);
 
         FArrayBox RHS_fab;  RHS_fab.resize(tbz, 1, The_Async_Arena());
         FArrayBox soln_fab; soln_fab.resize(tbz, 1, The_Async_Arena());
+        soln_fab.setVal<RunOn::Device>(zero);
 
         auto const& RHS_a  = RHS_fab.array();
         auto const& soln_a = soln_fab.array();
@@ -597,65 +599,84 @@ void erf_substep_EB (int step, int nrk,
         }); // b2d
 
         // *********************************************************************
-        // Tridiagonal solve for w (same as NS; identity rows handle covered faces)
+        // Tridiagonal solve for w — variable-length columns (terrain-only EB)
+        //
+        // Each column starts from k_terr(i,j,0) = first uncovered w-face.
+        // Below that index, soln_a is zero-initialized and cur_zmom is
+        // left at stage_zmom (unchanged).  Identity rows in make_fast_coeffs
+        // (A=0, B=1, C=0 for covered faces) decouple the covered region,
+        // so the partial-range solve is mathematically exact.
         // *********************************************************************
 #ifdef AMREX_USE_GPU
         ParallelFor(b2d, [=] AMREX_GPU_DEVICE (int i, int j, int)
         {
-            soln_a(i,j,lo.z) = RHS_a(i,j,lo.z) * inv_coeffB_a(i,j,lo.z);
-            cur_zmom(i,j,lo.z) = stage_zmom(i,j,lo.z) + soln_a(i,j,lo.z);
+            int k_start = k_terr(i,j,lo.z);
 
-            for (int k = lo.z+1; k <= hi.z+1; k++) {
+            // Fully covered column — soln already zero-initialised
+            if (k_start > hi.z+1) { return; }
+
+            // Forward substitution from k_start
+            soln_a(i,j,k_start) = RHS_a(i,j,k_start) * inv_coeffB_a(i,j,k_start);
+            cur_zmom(i,j,k_start) = stage_zmom(i,j,k_start) + soln_a(i,j,k_start);
+
+            for (int k = k_start+1; k <= hi.z+1; k++) {
                 soln_a(i,j,k) = (RHS_a(i,j,k) - coeffA_a(i,j,k)*soln_a(i,j,k-1)) * inv_coeffB_a(i,j,k);
             }
 
             cur_zmom(i,j,hi.z+1) = stage_zmom(i,j,hi.z+1) + soln_a(i,j,hi.z+1);
 
-            for (int k = hi.z; k >= lo.z; k--) {
+            // Back substitution down to k_start
+            for (int k = hi.z; k >= k_start; k--) {
                 soln_a(i,j,k) -= (coeffC_a(i,j,k) * inv_coeffB_a(i,j,k)) * soln_a(i,j,k+1);
                 cur_zmom(i,j,k) = stage_zmom(i,j,k) + soln_a(i,j,k);
             }
         }); // b2d
 #else
+        // CPU path: use tile-wide k_min to preserve SIMD vectorisation.
+        // Columns with k_min <= k < k_terr(i,j) pass through identity rows
+        // (A=0, B=1, C=0, RHS=0) which naturally produce soln=0.
+        int k_min = hi.z + 2; // sentinel
         for (int j = lo.y; j <= hi.y; ++j) {
-            AMREX_PRAGMA_SIMD
             for (int i = lo.x; i <= hi.x; ++i) {
-                soln_a(i,j,lo.z) = RHS_a(i,j,lo.z) * inv_coeffB_a(i,j,lo.z);
+                k_min = std::min(k_min, k_terr(i,j,lo.z));
             }
         }
-        for (int k = lo.z+1; k <= hi.z+1; ++k) {
+        if (k_min <= hi.z+1) {
+            // Forward substitution — first level
             for (int j = lo.y; j <= hi.y; ++j) {
                 AMREX_PRAGMA_SIMD
                 for (int i = lo.x; i <= hi.x; ++i) {
-                    soln_a(i,j,k) = (RHS_a(i,j,k) - coeffA_a(i,j,k)*soln_a(i,j,k-1)) * inv_coeffB_a(i,j,k);
+                    soln_a(i,j,k_min) = RHS_a(i,j,k_min) * inv_coeffB_a(i,j,k_min);
                 }
             }
-        }
-        for (int j = lo.y; j <= hi.y; ++j) {
-            AMREX_PRAGMA_SIMD
-            for (int i = lo.x; i <= hi.x; ++i) {
-                cur_zmom(i,j,hi.z+1) = stage_zmom(i,j,hi.z+1) + soln_a(i,j,hi.z+1);
+            // Forward substitution — remaining levels
+            for (int k = k_min+1; k <= hi.z+1; ++k) {
+                for (int j = lo.y; j <= hi.y; ++j) {
+                    AMREX_PRAGMA_SIMD
+                    for (int i = lo.x; i <= hi.x; ++i) {
+                        soln_a(i,j,k) = (RHS_a(i,j,k) - coeffA_a(i,j,k)*soln_a(i,j,k-1)) * inv_coeffB_a(i,j,k);
+                    }
+                }
             }
-        }
-        for (int k = hi.z; k >= lo.z; --k) {
+            // Update top boundary
             for (int j = lo.y; j <= hi.y; ++j) {
                 AMREX_PRAGMA_SIMD
                 for (int i = lo.x; i <= hi.x; ++i) {
-                    soln_a(i,j,k) -= (coeffC_a(i,j,k) * inv_coeffB_a(i,j,k)) * soln_a(i,j,k+1);
-                    cur_zmom(i,j,k) = stage_zmom(i,j,k) + soln_a(i,j,k);
+                    cur_zmom(i,j,hi.z+1) = stage_zmom(i,j,hi.z+1) + soln_a(i,j,hi.z+1);
                 }
             }
-        }
+            // Back substitution
+            for (int k = hi.z; k >= k_min; --k) {
+                for (int j = lo.y; j <= hi.y; ++j) {
+                    AMREX_PRAGMA_SIMD
+                    for (int i = lo.x; i <= hi.x; ++i) {
+                        soln_a(i,j,k) -= (coeffC_a(i,j,k) * inv_coeffB_a(i,j,k)) * soln_a(i,j,k+1);
+                        cur_zmom(i,j,k) = stage_zmom(i,j,k) + soln_a(i,j,k);
+                    }
+                }
+            }
+        } // k_min <= hi.z+1
 #endif
-
-        // EB: zero out any remaining non-zero w on fully covered z-faces
-        // (should already be zero from identity rows + RHS=0, but enforce for safety)
-        ParallelFor(tbz, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            if (vfrac_w(i,j,k) == zero) {
-                cur_zmom(i,j,k) = zero;
-                soln_a(i,j,k)   = zero;
-            }
-        });
 
         if (l_rayleigh_impl_for_w) {
             ParallelFor(bx_shrunk_in_k, [=] AMREX_GPU_DEVICE (int i, int j, int k)
