@@ -231,9 +231,11 @@ void erf_substep_EB (int step, int nrk,
         const Array4<const Real>& mf_ux = mapfac[MapFacType::u_x]->const_array(mfi);
         const Array4<const Real>& mf_vy = mapfac[MapFacType::v_y]->const_array(mfi);
 
-        // EB: staggered volume fractions for x- and y-momentum faces
+        // EB
+        const Array4<const EBCellFlag>& flag_c = (ebfact.get_const_factory())->getMultiEBCellFlagFab()[mfi].const_array();        
         const Array4<const EBCellFlag>& flag_u = (ebfact.get_u_const_factory())->getMultiEBCellFlagFab()[mfi].const_array();
         const Array4<const EBCellFlag>& flag_v = (ebfact.get_v_const_factory())->getMultiEBCellFlagFab()[mfi].const_array();
+        const Array4<const Real> vfrac_c = (ebfact.get_const_factory())->getVolFrac().const_array(mfi);
 
         // *********************************************************************
         // Define updates in the RHS of {x, y, z}-momentum equations
@@ -273,11 +275,22 @@ void erf_substep_EB (int step, int nrk,
 
                 } else {
 
-                    Real gpx = (theta_extrap(i,j,k) - theta_extrap(i-1,j,k)) * dxi; // Need extrapolation
+                    // Extrapolate theta to x-faces
+                    Real gpx = zero;
+                    if (flag_c(i,j,k).isCovered()) {
+                        gpx = (theta_extrap(i-3,j,k) - three*theta_extrap(i-2,j,k) + two*theta_extrap(i-1,j,k)) * dxi;
+                    } else if (flag_c(i-1,j,k).isCovered()) {
+                        gpx = (three*theta_extrap(i+1,j,k) - theta_extrap(i+2,j,k) - two*theta_extrap(i,j,k)) * dxi;
+                    } else {
+                        gpx = (theta_extrap(i,j,k) - theta_extrap(i-1,j,k)) * dxi;
+                    }
                     gpx *= mf_ux(i,j,0);
 
-                    Real q = (l_use_moisture) ? myhalf * (qt_arr(i,j,k) + qt_arr(i-1,j,k)) : zero;
-                    Real pi_c = myhalf * (pi_stage_ca(i-1,j,k,0) + pi_stage_ca(i,j,k,0));
+                    Real wt_hi = vfrac_c(i  ,j,k) / (vfrac_c(i,j,k)+vfrac_c(i-1,j,k));
+                    Real wt_lo = vfrac_c(i-1,j,k) / (vfrac_c(i,j,k)+vfrac_c(i-1,j,k));
+
+                    Real q = (l_use_moisture) ? (wt_hi * qt_arr(i,j,k) + wt_lo * qt_arr(i-1,j,k)) : zero;
+                    Real pi_c = wt_lo * pi_stage_ca(i-1,j,k,0) + wt_hi * pi_stage_ca(i,j,k,0);
                     Real fast_rhs_rho_u = -Gamma * R_d * pi_c * gpx / (one + q);
 
                     Real new_drho_u = prev_xmom(i,j,k) - stage_xmom(i,j,k)
@@ -297,11 +310,22 @@ void erf_substep_EB (int step, int nrk,
 
                 } else {
 
-                    Real gpy = (theta_extrap(i,j,k) - theta_extrap(i,j-1,k)) * dyi;
+                    // Extrapolate theta to y-faces
+                    Real gpy = zero;
+                    if (flag_c(i,j,k).isCovered()) {
+                        gpy = (theta_extrap(i,j-3,k) - three*theta_extrap(i,j-2,k) + two*theta_extrap(i,j-1,k)) * dyi;
+                    } else if (flag_c(i,j-1,k).isCovered()) {
+                        gpy = (three*theta_extrap(i,j+1,k) - theta_extrap(i,j+2,k) - two*theta_extrap(i,j,k)) * dyi;
+                    } else {
+                        gpy = (theta_extrap(i,j,k) - theta_extrap(i,j-1,k)) * dyi;
+                    }
                     gpy *= mf_vy(i,j,0);
 
-                    Real q = (l_use_moisture) ? myhalf * (qt_arr(i,j,k) + qt_arr(i,j-1,k)) : zero;
-                    Real pi_c = myhalf * (pi_stage_ca(i,j-1,k,0) + pi_stage_ca(i,j,k,0));
+                    Real wt_hi = vfrac_c(i  ,j,k) / (vfrac_c(i,j,k) + vfrac_c(i,j-1,k));
+                    Real wt_lo = vfrac_c(i,j-1,k) / (vfrac_c(i,j,k) + vfrac_c(i,j-1,k));
+
+                    Real q = (l_use_moisture) ? (wt_hi * qt_arr(i,j,k) + wt_lo * qt_arr(i,j-1,k)) : zero;
+                    Real pi_c = wt_lo * pi_stage_ca(i,j-1,k,0) + wt_hi * pi_stage_ca(i,j,k,0);
                     Real fast_rhs_rho_v = -Gamma * R_d * pi_c * gpy / (one + q);
 
                     Real new_drho_v = prev_ymom(i,j,k) - stage_ymom(i,j,k)
@@ -364,10 +388,13 @@ void erf_substep_EB (int step, int nrk,
         // EB cell flags
         EBCellFlagFab const& flag_c_fab = (ebfact.get_const_factory())->getMultiEBCellFlagFab()[mfi];
         bool l_singlevalued = (flag_c_fab.getType(bx) == FabType::singlevalued);
+        const Array4<const EBCellFlag> flag_c = flag_c_fab.const_array();
         const Array4<const Real> apx_c = l_singlevalued ? (ebfact.get_const_factory())->getAreaFrac()[0]->const_array(mfi) : Array4<const Real>{};
         const Array4<const Real> apy_c = l_singlevalued ? (ebfact.get_const_factory())->getAreaFrac()[1]->const_array(mfi) : Array4<const Real>{};
         const Array4<const Real> apz_c = l_singlevalued ? (ebfact.get_const_factory())->getAreaFrac()[2]->const_array(mfi) : Array4<const Real>{};
         const Array4<const Real> vfrac_c = (ebfact.get_const_factory())->getVolFrac().const_array(mfi);
+        const Array4<const EBCellFlag>& flag_w = (ebfact.get_w_const_factory())->getMultiEBCellFlagFab()[mfi].const_array();
+        const Array4<const Real> vfrac_w = (ebfact.get_w_const_factory())->getVolFrac().const_array(mfi);
 
         // This is MultiCutFab, so
 
@@ -392,43 +419,50 @@ void erf_substep_EB (int step, int nrk,
         const GpuArray<const Array4<Real>, AMREX_SPACEDIM>
             flx_arr{{AMREX_D_DECL(flux[0].array(), flux[1].array(), flux[2].array())}};
 
-        // *********************************************************************
         ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-            Real xflux_lo = (temp_cur_xmom_arr(i  ,j,k) - stage_xmom(i  ,j,k)) / mf_uy(i  ,j,0);
-            Real xflux_hi = (temp_cur_xmom_arr(i+1,j,k) - stage_xmom(i+1,j,k)) / mf_uy(i+1,j,0);
-            Real yflux_lo = (temp_cur_ymom_arr(i,j  ,k) - stage_ymom(i,j  ,k)) / mf_vx(i,j  ,0);
-            Real yflux_hi = (temp_cur_ymom_arr(i,j+1,k) - stage_ymom(i,j+1,k)) / mf_vx(i,j+1,0);
+            if (flag_c(i,j,k).isCovered()) {
 
-            Real mfsq = mf_mx(i,j,0) * mf_my(i,j,0);
+                temp_rhs_arr(i,j,k,Rho_comp) = zero;
+                temp_rhs_arr(i,j,k,RhoTheta_comp) = zero;
+                
+            } else {
+                
+                Real xflux_lo = (temp_cur_xmom_arr(i  ,j,k) - stage_xmom(i  ,j,k)) / mf_uy(i  ,j,0);
+                Real xflux_hi = (temp_cur_xmom_arr(i+1,j,k) - stage_xmom(i+1,j,k)) / mf_uy(i+1,j,0);
+                Real yflux_lo = (temp_cur_ymom_arr(i,j  ,k) - stage_ymom(i,j  ,k)) / mf_vx(i,j  ,0);
+                Real yflux_hi = (temp_cur_ymom_arr(i,j+1,k) - stage_ymom(i,j+1,k)) / mf_vx(i,j+1,0);
 
-            Real apx_hi = l_singlevalued ? apx_c(i+1,j,k) : one;
-            Real apx_lo = l_singlevalued ? apx_c(i  ,j,k) : one;
-            Real apy_hi = l_singlevalued ? apy_c(i,j+1,k) : one;
-            Real apy_lo = l_singlevalued ? apy_c(i,j  ,k) : one;
+                Real mfsq = mf_mx(i,j,0) * mf_my(i,j,0);
 
-            temp_rhs_arr(i,j,k,Rho_comp     ) = ( ( apx_hi * xflux_hi - apx_lo * xflux_lo ) * dxi * mfsq
-                                                + ( apy_hi * yflux_hi - apy_lo * yflux_lo ) * dyi * mfsq ) / vfrac_c(i,j,k);
+                Real apx_hi = l_singlevalued ? apx_c(i+1,j,k) : one;
+                Real apx_lo = l_singlevalued ? apx_c(i  ,j,k) : one;
+                Real apy_hi = l_singlevalued ? apy_c(i,j+1,k) : one;
+                Real apy_lo = l_singlevalued ? apy_c(i,j  ,k) : one;
 
-            Real theta_t_x_hi  = ( vfrac_c(i,j,k) * prim(i,j,k,0) + vfrac_c(i+1,j,k) * prim(i+1,j,k,0) ) / (vfrac_c(i,j,k) + vfrac_c(i+1,j,k));
-            Real theta_t_x_lo  = ( vfrac_c(i,j,k) * prim(i,j,k,0) + vfrac_c(i-1,j,k) * prim(i-1,j,k,0) ) / (vfrac_c(i,j,k) + vfrac_c(i-1,j,k));
-            Real theta_t_y_hi  = ( vfrac_c(i,j,k) * prim(i,j,k,0) + vfrac_c(i,j+1,k) * prim(i,j+1,k,0) ) / (vfrac_c(i,j,k) + vfrac_c(i,j+1,k));
-            Real theta_t_y_lo  = ( vfrac_c(i,j,k) * prim(i,j,k,0) + vfrac_c(i,j-1,k) * prim(i,j-1,k,0) ) / (vfrac_c(i,j,k) + vfrac_c(i,j-1,k));
+                temp_rhs_arr(i,j,k,Rho_comp     ) = ( ( apx_hi * xflux_hi - apx_lo * xflux_lo ) * dxi * mfsq
+                                                    + ( apy_hi * yflux_hi - apy_lo * yflux_lo ) * dyi * mfsq ) / vfrac_c(i,j,k);
 
-            temp_rhs_arr(i,j,k,RhoTheta_comp) = (( apx_hi * xflux_hi * theta_t_x_hi - apx_lo * xflux_lo * theta_t_x_lo ) * dxi * mfsq +
-                                                 ( apy_hi * yflux_hi * theta_t_y_hi - apy_lo * yflux_lo * theta_t_y_lo ) * dyi * mfsq) / vfrac_c(i,j,k);
+                Real theta_t_x_hi  = ( vfrac_c(i,j,k) * prim(i,j,k,0) + vfrac_c(i+1,j,k) * prim(i+1,j,k,0) ) / (vfrac_c(i,j,k) + vfrac_c(i+1,j,k));
+                Real theta_t_x_lo  = ( vfrac_c(i,j,k) * prim(i,j,k,0) + vfrac_c(i-1,j,k) * prim(i-1,j,k,0) ) / (vfrac_c(i,j,k) + vfrac_c(i-1,j,k));
+                Real theta_t_y_hi  = ( vfrac_c(i,j,k) * prim(i,j,k,0) + vfrac_c(i,j+1,k) * prim(i,j+1,k,0) ) / (vfrac_c(i,j,k) + vfrac_c(i,j+1,k));
+                Real theta_t_y_lo  = ( vfrac_c(i,j,k) * prim(i,j,k,0) + vfrac_c(i,j-1,k) * prim(i,j-1,k,0) ) / (vfrac_c(i,j,k) + vfrac_c(i,j-1,k));
 
-            if (l_reflux) {
-                (flx_arr[0])(i,j,k,0) = xflux_lo;
-                (flx_arr[0])(i,j,k,1) = xflux_lo * theta_t_x_lo;
-                (flx_arr[1])(i,j,k,0) = yflux_lo;
-                (flx_arr[1])(i,j,k,1) = yflux_lo * theta_t_y_lo;
-                if (i == vbx_hi.x) {
-                    (flx_arr[0])(i+1,j,k,0) = xflux_hi;
-                    (flx_arr[0])(i+1,j,k,1) = xflux_hi * theta_t_x_hi;
-                }
-                if (j == vbx_hi.y) {
-                    (flx_arr[1])(i,j+1,k,0) = yflux_hi;
-                    (flx_arr[1])(i,j+1,k,1) = yflux_hi * theta_t_y_hi;
+                temp_rhs_arr(i,j,k,RhoTheta_comp) = (( apx_hi * xflux_hi * theta_t_x_hi - apx_lo * xflux_lo * theta_t_x_lo ) * dxi * mfsq +
+                                                     ( apy_hi * yflux_hi * theta_t_y_hi - apy_lo * yflux_lo * theta_t_y_lo ) * dyi * mfsq) / vfrac_c(i,j,k);
+
+                if (l_reflux) {
+                    (flx_arr[0])(i,j,k,0) = xflux_lo;
+                    (flx_arr[0])(i,j,k,1) = xflux_lo * theta_t_x_lo;
+                    (flx_arr[1])(i,j,k,0) = yflux_lo;
+                    (flx_arr[1])(i,j,k,1) = yflux_lo * theta_t_y_lo;
+                    if (i == vbx_hi.x) {
+                        (flx_arr[0])(i+1,j,k,0) = xflux_hi;
+                        (flx_arr[0])(i+1,j,k,1) = xflux_hi * theta_t_x_hi;
+                    }
+                    if (j == vbx_hi.y) {
+                        (flx_arr[1])(i,j+1,k,0) = yflux_hi;
+                        (flx_arr[1])(i,j+1,k,1) = yflux_hi * theta_t_y_hi;
+                    }
                 }
             }
         });
@@ -449,42 +483,90 @@ void erf_substep_EB (int step, int nrk,
         // *********************************************************************
         ParallelFor(bx_shrunk_in_k, [=] AMREX_GPU_DEVICE (int i, int j, int k)
         {
-            // EB: covered z-face → leave RHS = 0 (consistent with identity coefficients)
-            if (vfrac_w(i,j,k) == zero) {
+            // EB: covered z-face --> leave RHS = 0 (consistent with identity coefficients)
+            if (flag_w(i,j,k).isCovered()) {
+
                 RHS_a(i,j,k) = zero;
-                return;
+                
+            } else {
+
+                Real theta_t_hi = ( vfrac_c(i,j,k  ) * prim(i,j,k  ,PrimTheta_comp) + vfrac_c(i,j,k+1) * prim(i,j,k+1,PrimTheta_comp) ) 
+                                / (vfrac_c(i,j,k  ) + vfrac_c(i,j,k+1));
+
+                Real Omega_kp1 = prev_zmom(i,j,k+1) - stage_zmom(i,j,k+1);
+                Real Omega_k   = prev_zmom(i,j,k  ) - stage_zmom(i,j,k  );
+                Real old_drho_k = prev_cons(i,j,k,Rho_comp) - stage_cons(i,j,k,Rho_comp);
+
+                Real apz_kp1 = l_singlevalued ? apz_c(i,j,k+1) : one;
+                Real apz_k   = l_singlevalued ? apz_c(i  ,j,k) : one;
+
+                Real dz_inv = one / dz_ptr[k];
+
+                Real R0_tmp = zero;
+                Real R1_tmp = zero;
+
+                if (!flag_c(i,j,k).isCovered() && !flag_c(i,j,k-1).isCovered()) {
+                    // Interpolate the vertical pressure gradient
+
+                    Real wt_hi = vfrac_c(i,j,k  ) / (vfrac_c(i,j,k) + vfrac_c(i,j,k-1));
+                    Real wt_lo = vfrac_c(i,j,k-1) / (vfrac_c(i,j,k) + vfrac_c(i,j,k-1));
+
+                    Real q = (l_use_moisture) ? (wt_hi * qt_arr(i,j,k) + wt_lo * qt_arr(i,j,k-1)) : zero;
+
+                    Real coeff_P = coeffP_a(i,j,k) / (one + q);
+                    Real coeff_Q = coeffQ_a(i,j,k) / (one + q);
+
+                    Real theta_t_lo  = ( vfrac_c(i,j,k-2) * prim(i,j,k-2,PrimTheta_comp) + vfrac_c(i,j,k-1) * prim(i,j,k-1,PrimTheta_comp) ) / (vfrac_c(i,j,k-2) + vfrac_c(i,j,k-1));
+                    Real theta_t_mid = wt_lo * prim(i,j,k-1,PrimTheta_comp) + wt_hi * prim(i,j,k  ,PrimTheta_comp);
+
+                    Real Omega_km1 = prev_zmom(i,j,k-1) - stage_zmom(i,j,k-1);
+
+                    Real old_drho_km1 = prev_cons(i,j,k-1,Rho_comp) - stage_cons(i,j,k-1,Rho_comp);
+
+                    R0_tmp = coeff_P * prev_drho_theta(i,j,k) + coeff_Q * prev_drho_theta(i,j,k-1)
+                            - gravity * ( wt_hi * old_drho_k   + wt_lo * old_drho_km1 );
+                    
+                    Real apz_km1 = l_singlevalued ? apz_c(i,j,k-1) : one;
+
+                    R1_tmp = wt_hi * gravity * ( temp_rhs_arr(i,j,k  ,Rho_comp) - slow_rhs_cons(i,j,k  ,Rho_comp)  
+                                                + beta_1 * dz_inv / vfrac_w(i,j,k) * ( apz_kp1 * Omega_kp1 - apz_k * Omega_k ) )                                    
+                            + wt_lo * gravity * ( temp_rhs_arr(i,j,k-1,Rho_comp) - slow_rhs_cons(i,j,k-1,Rho_comp) ) 
+                                            + beta_1 * dz_inv / vfrac_w(i,j,k-1) * ( apz_k * Omega_k - apz_km1 * Omega_km1 )
+                            + coeff_P * (slow_rhs_cons(i,j,k  ,RhoTheta_comp) - temp_rhs_arr(i,j,k  ,RhoTheta_comp)
+                                        - beta_1 * dz_inv / vfrac_w(i,j,k) * ( apz_kp1 * Omega_kp1 * theta_t_hi 
+                                                                            - apz_k   * Omega_k   * theta_t_mid ) )
+                            + coeff_Q * (slow_rhs_cons(i,j,k-1,RhoTheta_comp) - temp_rhs_arr(i,j,k-1,RhoTheta_comp)
+                                        - beta_1 * dz_inv / vfrac_w(i,j,k-1) * ( apz_k * Omega_k   * theta_t_mid 
+                                                                            - apz_km1 * Omega_km1 * theta_t_lo ) );
+                } else if (!flag_c(i,j,k).isCovered() && !flag_c(i,j,k-1).isCovered()) {
+                    // Extrapolate the vertical pressure gradient
+
+                    Real q = (l_use_moisture) ? qt_arr(i,j,k) : zero;
+
+                    Real coeff_O = coeffQ_a(i,j,k) / (one + q); // Save coefficient O in Q container
+                    Real coeff_P = coeffP_a(i,j,k) / (one + q);
+                    
+                    Real theta_t_hihi = ( vfrac_c(i,j,k+1) * prim(i,j,k+1,PrimTheta_comp) + vfrac_c(i,j,k+2) * prim(i,j,k+2,PrimTheta_comp) ) / (vfrac_c(i,j,k+1) + vfrac_c(i,j,k+2));
+                    Real theta_t_mid  = prim(i,j,k,PrimTheta_comp);
+
+                    Real Omega_kp2 = prev_zmom(i,j,k+2) - stage_zmom(i,j,k+2);
+                    
+                    R0_tmp = coeff_O * prev_drho_theta(i,j,k+1) + coeff_P * prev_drho_theta(i,j,k) - gravity * old_drho_k;
+
+                    Real apz_kp2 = l_singlevalued ? apz_c(i,j,k+2) : one;
+
+                    R1_tmp = gravity * ( temp_rhs_arr(i,j,k,Rho_comp) - slow_rhs_cons(i,j,k,Rho_comp)  
+                                            + beta_1 * dz_inv / vfrac_w(i,j,k) * ( apz_kp1 * Omega_kp1 - apz_k * Omega_k ) )                                    
+                            + coeff_O * (slow_rhs_cons(i,j,k+1,RhoTheta_comp) - temp_rhs_arr(i,j,k+1,RhoTheta_comp)
+                                        - beta_1 * dz_inv / vfrac_w(i,j,k+1) * ( apz_kp2 * Omega_kp2 * theta_t_hihi
+                                                                                - apz_kp1 * Omega_kp1 * theta_t_hi ) )
+                            + coeff_P * (slow_rhs_cons(i,j,k  ,RhoTheta_comp) - temp_rhs_arr(i,j,k  ,RhoTheta_comp)
+                                        - beta_1 * dz_inv / vfrac_w(i,j,k  ) * ( apz_kp1 * Omega_kp1 * theta_t_hi 
+                                                                                - apz_k   * Omega_k   * theta_t_mid ) );
+                }
+
+                RHS_a(i,j,k) = Omega_k + dtau * (slow_rhs_rho_w(i,j,k) + R0_tmp + dtau * beta_2 * R1_tmp + zmom_src_arr(i,j,k));
             }
-
-            Real q = (l_use_moisture) ? (vfrac_c(i,j,k) * qt_arr(i,j,k) + vfrac_c(i,j,k-1) * qt_arr(i,j,k-1)) / (vfrac_c(i,j,k) + vfrac_c(i,j,k-1)) : zero;
-
-            Real coeff_P = coeffP_a(i,j,k) / (one + q);
-            Real coeff_Q = coeffQ_a(i,j,k) / (one + q);
-
-            Real theta_t_lo  = ( vfrac_c(i,j,k-2) * prim(i,j,k-2,PrimTheta_comp) + vfrac_c(i,j,k-1) * prim(i,j,k-1,PrimTheta_comp) ) / (vfrac_c(i,j,k-2) + vfrac_c(i,j,k-1));
-            Real theta_t_mid = ( vfrac_c(i,j,k-1) * prim(i,j,k-1,PrimTheta_comp) + vfrac_c(i,j,k  ) * prim(i,j,k  ,PrimTheta_comp) ) / (vfrac_c(i,j,k-1) + vfrac_c(i,j,k  ));
-            Real theta_t_hi  = ( vfrac_c(i,j,k  ) * prim(i,j,k  ,PrimTheta_comp) + vfrac_c(i,j,k+1) * prim(i,j,k+1,PrimTheta_comp) ) / (vfrac_c(i,j,k  ) + vfrac_c(i,j,k+1));
-
-            Real Omega_kp1 = prev_zmom(i,j,k+1) - stage_zmom(i,j,k+1);
-            Real Omega_k   = prev_zmom(i,j,k  ) - stage_zmom(i,j,k  );
-            Real Omega_km1 = prev_zmom(i,j,k-1) - stage_zmom(i,j,k-1);
-
-            Real old_drho_k   = prev_cons(i,j,k  ,Rho_comp) - stage_cons(i,j,k  ,Rho_comp);
-            Real old_drho_km1 = prev_cons(i,j,k-1,Rho_comp) - stage_cons(i,j,k-1,Rho_comp);
-            Real R0_tmp = coeff_P * prev_drho_theta(i,j,k) + coeff_Q * prev_drho_theta(i,j,k-1)
-                        - gravity * ( vfrac_c(i,j,k) * old_drho_k   + vfrac_c(i,j,k-1) * old_drho_km1 ) / (vfrac_c(i,j,k) + vfrac_c(i,j,k-1));
-
-            Real R1_tmp = gravity * ( vfrac_c(i,j,k  ) * (temp_rhs_arr(i,j,k  ,Rho_comp) - slow_rhs_cons(i,j,k  ,Rho_comp)) 
-                                    + vfrac_c(i,j,k-1) * (temp_rhs_arr(i,j,k-1,Rho_comp) - slow_rhs_cons(i,j,k-1,Rho_comp)) )
-                                    / (vfrac_c(i,j,k) + vfrac_c(i,j,k-1))
-                        + coeff_P * (slow_rhs_cons(i,j,k  ,RhoTheta_comp) - temp_rhs_arr(i,j,k  ,RhoTheta_comp)) 
-                        + coeff_Q * (slow_rhs_cons(i,j,k-1,RhoTheta_comp) - temp_rhs_arr(i,j,k-1,RhoTheta_comp));
-
-            Real dz_inv = one / dz_ptr[k];
-            R1_tmp += beta_1 * dz_inv * ( (Omega_kp1 - Omega_km1)                         * myhalfg
-                                         -(Omega_kp1*theta_t_hi  - Omega_k  *theta_t_mid) * coeff_P
-                                         -(Omega_k  *theta_t_mid - Omega_km1*theta_t_lo ) * coeff_Q ) / vfrac_w(i,j,k);
-
-            RHS_a(i,j,k) = Omega_k + dtau * (slow_rhs_rho_w(i,j,k) + R0_tmp + dtau * beta_2 * R1_tmp + zmom_src_arr(i,j,k));
         }); // bx_shrunk_in_k
 
         Box b2d = tbz;
@@ -497,20 +579,20 @@ void erf_substep_EB (int step, int nrk,
         ParallelFor(b2d, [=] AMREX_GPU_DEVICE (int i, int j, int)
         {
             // EB: covered domain-boundary z-faces get RHS = 0
-            if (vfrac_w(i,j,lo.z) > zero) {
+            if (flag_w(i,j,lo.z).isCovered()) {
+                RHS_a(i,j,lo.z) = zero;
+            } else {
                 RHS_a(i,j,lo.z) = prev_zmom(i,j,lo.z) - stage_zmom(i,j,lo.z)
                                  + dtau * slow_rhs_rho_w(i,j,lo.z)
                                  + dtau * zmom_src_arr(i,j,lo.z);
-            } else {
-                RHS_a(i,j,lo.z) = zero;
             }
 
-            if (vfrac_w(i,j,hi.z+1) > zero) {
+            if (flag_w(i,j,hi.z+1).isCovered()) {
+                RHS_a(i,j,hi.z+1) = zero;
+            } else {
                 RHS_a(i,j,hi.z+1) = prev_zmom(i,j,hi.z+1) - stage_zmom(i,j,hi.z+1)
                                    + dtau * slow_rhs_rho_w(i,j,hi.z+1)
                                    + dtau * zmom_src_arr(i,j,hi.z+1);
-            } else {
-                RHS_a(i,j,hi.z+1) = zero;
             }
         }); // b2d
 
