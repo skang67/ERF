@@ -475,9 +475,6 @@ void erf_substep_EB (int step, int nrk,
         bx_shrunk_in_k.setSmall(2,klo+1);
         bx_shrunk_in_k.setBig(2,khi-1);
 
-        Real myhalfg = std::abs(myhalf * grav_gpu[2]);
-        Real gravity = std::abs(grav_gpu[2]);
-
         // *********************************************************************
         // Build RHS for vertical tridiagonal solve (interior faces)
         // EB: covered z-faces get RHS = 0 (identity row in make_fast_coeffs
