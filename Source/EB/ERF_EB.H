@@ -7,6 +7,7 @@
 
 #include <AMReX_EB2.H>
 #include <AMReX_EBFabFactory.H>
+#include <AMReX_iMultiFab.H>
 
 #include <ERF_EBAux.H>
 
@@ -51,6 +52,10 @@ class eb_ {
     eb_aux_ const* get_v_const_factory() const noexcept { return &m_v_factory; }
     eb_aux_ const* get_w_const_factory() const noexcept { return &m_w_factory; }
 
+    //! Per-column index of the first uncovered w-face (terrain-only EB).
+    //! For fully covered columns the value is domain_hi_z + 2 (sentinel).
+    const amrex::iMultiFab& get_k_terrain () const noexcept { return m_k_terrain; }
+
     class EBToPVD;
 
   private:
@@ -72,6 +77,9 @@ class eb_ {
     eb_aux_ m_u_factory;
     eb_aux_ m_v_factory;
     eb_aux_ m_w_factory;
+
+    //! Per-column first uncovered w-face index (2D, one int per (i,j))
+    amrex::iMultiFab m_k_terrain;
 
     void make_terrain (amrex::Geometry const& a_geom);
 
