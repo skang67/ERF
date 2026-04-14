@@ -56,7 +56,6 @@ void make_fast_coeffs (int /*level*/,
     MultiFab coeff_P_mf(fast_coeffs, amrex::make_alias, 3, 1);
     MultiFab coeff_Q_mf(fast_coeffs, amrex::make_alias, 4, 1);
 
-
     // *************************************************************************
     // Set gravity as a vector
     const    Array<Real,AMREX_SPACEDIM> grav{zero, zero, -gravity};
@@ -74,6 +73,8 @@ void make_fast_coeffs (int /*level*/,
     {
         Box bx  = mfi.tilebox();
         Box tbz = surroundingNodes(bx,2);
+
+        bool l_use_eb = (p_ebfact != nullptr);
 
         const Array4<const Real> & stage_cons = S_stage_data[IntVars::cons].const_array(mfi);
         const Array4<const Real> & prim       = S_stage_prim.const_array(mfi);
@@ -160,7 +161,6 @@ void make_fast_coeffs (int /*level*/,
         } else {
 
             // EB: fetch z-face cell flags if an EB factory was provided
-            bool l_use_eb = (p_ebfact != nullptr);
             const Array4<const EBCellFlag> flag_w_arr = l_use_eb ?
                 p_ebfact->get_w_const_factory()->getMultiEBCellFlagFab()[mfi].const_array()
                 : Array4<const EBCellFlag>{};
@@ -168,7 +168,7 @@ void make_fast_coeffs (int /*level*/,
             ParallelFor(bx_shrunk_in_k, [=] AMREX_GPU_DEVICE (int i, int j, int k)
             {
                 // EB: covered z-face → identity row (A=0, B=1, C=0, P=0, Q=0)
-                //     so the tridiagonal solver gives w=0 at covered faces.
+                //     so the tridiagonal solver gives W=0 at covered faces.
                 if (l_use_eb && flag_w_arr(i,j,k).isCovered()) {
                     coeffA_a(i,j,k) = zero;
                     coeffB_a(i,j,k) = one;
@@ -177,27 +177,26 @@ void make_fast_coeffs (int /*level*/,
                     coeffQ_a(i,j,k) = zero;
                     return;
                 }
-                Real rhobar_lo, rhobar_hi, pibar_lo, pibar_hi;
-                rhobar_lo =  r0_ca(i,j,k-1);
-                rhobar_hi =  r0_ca(i,j,k  );
-                 pibar_lo = pi0_ca(i,j,k-1);
-                 pibar_hi = pi0_ca(i,j,k  );
+                Real rhobar_lo =  r0_ca(i,j,k-1);
+                Real rhobar_hi =  r0_ca(i,j,k  );
+                Real pibar_lo  = pi0_ca(i,j,k-1);
+                Real pibar_hi  = pi0_ca(i,j,k  );
 
-                 Real pi_c =  myhalf * (pi_stage_ca(i,j,k-1) + pi_stage_ca(i,j,k));
+                Real pi_c =  myhalf * (pi_stage_ca(i,j,k-1) + pi_stage_ca(i,j,k));
 
-                 Real qv_p = (l_use_moisture) ? prim(i,j,k  ,PrimQ1_comp) : zero;
-                 Real qv_q = (l_use_moisture) ? prim(i,j,k-1,PrimQ1_comp) : zero;
+                Real qv_p = (l_use_moisture) ? prim(i,j,k  ,PrimQ1_comp) : zero;
+                Real qv_q = (l_use_moisture) ? prim(i,j,k-1,PrimQ1_comp) : zero;
 
-                 Real coeff_P = -Gamma * R_d * dzi * pi_c * (one + RvOverRd*qv_p)
-                              +  halfg * R_d * rhobar_hi * pi_stage_ca(i,j,k) /
-                              (  c_v * pibar_hi * stage_cons(i,j,k,RhoTheta_comp) );
+                Real coeff_P = -Gamma * R_d * dzi * pi_c * (one + RvOverRd*qv_p)
+                            +  halfg * R_d * rhobar_hi * pi_stage_ca(i,j,k) /
+                            (  c_v * pibar_hi * stage_cons(i,j,k,RhoTheta_comp) );
 
-                 Real coeff_Q = Gamma * R_d * dzi * pi_c * (one + RvOverRd*qv_q)
-                              + halfg * R_d * rhobar_lo * pi_stage_ca(i,j,k-1) /
-                              ( c_v  * pibar_lo * stage_cons(i,j,k-1,RhoTheta_comp) );
+                Real coeff_Q = Gamma * R_d * dzi * pi_c * (one + RvOverRd*qv_q)
+                            + halfg * R_d * rhobar_lo * pi_stage_ca(i,j,k-1) /
+                            ( c_v  * pibar_lo * stage_cons(i,j,k-1,RhoTheta_comp) );
 
-                 coeffP_a(i,j,k) = coeff_P;
-                 coeffQ_a(i,j,k) = coeff_Q;
+                coeffP_a(i,j,k) = coeff_P;
+                coeffQ_a(i,j,k) = coeff_Q;
 
                 if (l_use_moisture) {
                     Real q = myhalf * ( prim(i,j,k,PrimQ1_comp) + prim(i,j,k-1,PrimQ1_comp)
@@ -229,6 +228,12 @@ void make_fast_coeffs (int /*level*/,
 
         {
         BL_PROFILE("make_coeffs_b2d_loop");
+
+        // EB: per-column first uncovered w-face index for variable-length LU sweep
+        const Array4<const int> k_terr = l_use_eb ?
+            p_ebfact->get_k_terrain().const_array(mfi)
+            : Array4<const int>{};
+
 #ifdef AMREX_USE_GPU
         ParallelFor(b2d, [=] AMREX_GPU_DEVICE (int i, int j, int) {
 
@@ -250,10 +255,16 @@ void make_fast_coeffs (int /*level*/,
               coeffA_a(i,j,hi.z+1) =  -one;
           }
 
-          // w = specified Dirichlet value at k = lo.z
           Real bet = coeffB_a(i,j,lo.z);
+          int k_start = lo.z;
 
-          for (int k = lo.z+1; k <= hi.z+1; k++) {
+          // EB: start LU sweep from first uncovered w-face (terrain-only EB)
+          if (l_use_eb) {
+              k_start = k_terr(i,j,lo.z);
+              bet = coeffB_a(i,j,k_start);
+          }
+
+          for (int k = k_start+1; k <= hi.z+1; k++) {
               gam_a(i,j,k) = coeffC_a(i,j,k-1) / bet;
               bet = coeffB_a(i,j,k) - coeffA_a(i,j,k)*gam_a(i,j,k);
               coeffB_a(i,j,k) = bet;
@@ -287,7 +298,17 @@ void make_fast_coeffs (int /*level*/,
                 }
             }
         }
-        for (int k = lo.z+1; k <= hi.z+1; ++k) {
+        // EB: compute tile-wide k_min for SIMD-friendly LU sweep
+        int k_min = lo.z;
+        if (l_use_eb) {
+            k_min = hi.z + 2;
+            for (int j = lo.y; j <= hi.y; ++j) {
+                for (int i = lo.x; i <= hi.x; ++i) {
+                    k_min = std::min(k_min, k_terr(i,j,lo.z));
+                }
+            }
+        }
+        for (int k = k_min+1; k <= hi.z+1; ++k) {
             for (int j = lo.y; j <= hi.y; ++j) {
                 AMREX_PRAGMA_SIMD
                 for (int i = lo.x; i <= hi.x; ++i) {
