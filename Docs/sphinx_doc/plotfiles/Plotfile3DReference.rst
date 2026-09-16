@@ -356,6 +356,26 @@ The default subvolume inventory is documented on :ref:`sec:Plotfiles`.
 |                             | ``use_kturb``    |
 |                             | [m]              |
 +-----------------------------+------------------+
+| **Rt**                      | Smoothed         |
+|                             | turbulent        |
+|                             | Richardson       |
+|                             | number of the    |
+|                             | k-eqn RANS       |
+|                             | closure (Axell   |
+|                             | & Liungman       |
+|                             | 2001) [-]        |
++-----------------------------+------------------+
+| **cmu**                     | Momentum         |
+|                             | stability        |
+|                             | function of the  |
+|                             | k-eqn RANS       |
+|                             | closure [-]      |
++-----------------------------+------------------+
+| **cmu_prime**               | Scalar stability |
+|                             | function of the  |
+|                             | k-eqn RANS       |
+|                             | closure [-]      |
++-----------------------------+------------------+
 | **walldist**                | Wall distance    |
 |                             | for RANS models  |
 |                             | only [m]         |
@@ -445,6 +465,52 @@ The default subvolume inventory is documented on :ref:`sec:Plotfiles`.
 |                             | or buildings     |
 |                             | [1]              |
 +-----------------------------+------------------+
+| **ibseb_nfaces**            | Wall faces of the|
+|                             | building balance |
+|                             | touching the     |
+|                             | cell;            |
+|                             | erf.ibseb.enable |
+|                             | [1]              |
++-----------------------------+------------------+
+| **ibseb_tskin**             | Mean skin        |
+|                             | temperature of   |
+|                             | those faces;     |
+|                             | erf.ibseb.enable |
+|                             | [K]              |
++-----------------------------+------------------+
+| **ibseb_sw_abs**            | Mean absorbed    |
+|                             | shortwave of     |
+|                             | those faces;     |
+|                             | erf.ibseb.enable |
+|                             | [W/m2]           |
++-----------------------------+------------------+
+| **ibseb_shadow**            | Mean shadow flag |
+|                             | of those faces;  |
+|                             | erf.ibseb.enable |
+|                             | [1]              |
++-----------------------------+------------------+
+| **ibseb_lw_net**            | Mean net longwave|
+|                             | of those faces;  |
+|                             | erf.ibseb.enable |
+|                             | [W/m2]           |
++-----------------------------+------------------+
+| **ibseb_f_sky**             | Mean sky view    |
+|                             | fraction of those|
+|                             | faces;           |
+|                             | erf.ibseb.enable |
+|                             | [1]              |
++-----------------------------+------------------+
+| **ibseb_H**                 | Mean sensible    |
+|                             | flux out of those|
+|                             | faces;           |
+|                             | erf.ibseb.enable |
+|                             | [W/m2]           |
++-----------------------------+------------------+
+| **ibseb_G**                 | Mean conduction  |
+|                             | into those faces;|
+|                             | erf.ibseb.enable |
+|                             | [W/m2]           |
++-----------------------------+------------------+
 | **volfrac**                 | EB / immersed    |
 |                             | boundary volume  |
 |                             | fraction; unity  |
@@ -472,6 +538,162 @@ The default subvolume inventory is documented on :ref:`sec:Plotfiles`.
 |                             | to be defined    |
 |                             | [count]          |
 +-----------------------------+------------------+
+| **Tau11**                   | Subgrid stress   |
+|                             | component 11.    |
+|                             | Only available   |
+|                             | when diffusion   |
+|                             | is enabled       |
+|                             | [kg/m/s^2]       |
++-----------------------------+------------------+
+| **Tau12**                   | Subgrid stress   |
+|                             | component 12.    |
+|                             | Only available   |
+|                             | when diffusion   |
+|                             | is enabled       |
+|                             | [kg/m/s^2]       |
++-----------------------------+------------------+
+| **Tau13**                   | Subgrid stress   |
+|                             | component 13.    |
+|                             | Only available   |
+|                             | when diffusion   |
+|                             | is enabled       |
+|                             | [kg/m/s^2]       |
++-----------------------------+------------------+
+| **Tau21**                   | Subgrid stress   |
+|                             | component 21.    |
+|                             | Only available   |
+|                             | when diffusion   |
+|                             | is enabled       |
+|                             | [kg/m/s^2]       |
++-----------------------------+------------------+
+| **Tau22**                   | Subgrid stress   |
+|                             | component 22.    |
+|                             | Only available   |
+|                             | when diffusion   |
+|                             | is enabled       |
+|                             | [kg/m/s^2]       |
++-----------------------------+------------------+
+| **Tau23**                   | Subgrid stress   |
+|                             | component 23.    |
+|                             | Only available   |
+|                             | when diffusion   |
+|                             | is enabled       |
+|                             | [kg/m/s^2]       |
++-----------------------------+------------------+
+| **Tau31**                   | Subgrid stress   |
+|                             | component 31.    |
+|                             | Only available   |
+|                             | when diffusion   |
+|                             | is enabled       |
+|                             | [kg/m/s^2]       |
++-----------------------------+------------------+
+| **Tau32**                   | Subgrid stress   |
+|                             | component 32.    |
+|                             | Only available   |
+|                             | when diffusion   |
+|                             | is enabled       |
+|                             | [kg/m/s^2]       |
++-----------------------------+------------------+
+| **Tau33**                   | Subgrid stress   |
+|                             | component 33.    |
+|                             | Only available   |
+|                             | when diffusion   |
+|                             | is enabled       |
+|                             | [kg/m/s^2]       |
++-----------------------------+------------------+
+| **hfx1**                    | Heat flux in     |
+|                             | x-direction.     |
+|                             | Written when     |
+|                             | requested.       |
+|                             | Nonzero with X   |
+|                             | surface layer or |
+|                             | rotated zlo flux;|
+|                             | zero otherwise.  |
+|                             | Surface-layer    |
+|                             | flux, not the    |
+|                             | full horizontal  |
+|                             | diffusive flux.  |
+|                             | [W/m^2]          |
++-----------------------------+------------------+
+| **hfx2**                    | Heat flux in     |
+|                             | y-direction.     |
+|                             | Written when     |
+|                             | requested.       |
+|                             | Nonzero with Y   |
+|                             | surface layer or |
+|                             | rotated zlo flux;|
+|                             | zero otherwise.  |
+|                             | Surface-layer    |
+|                             | flux, not the    |
+|                             | full horizontal  |
+|                             | diffusive flux.  |
+|                             | [W/m^2]          |
++-----------------------------+------------------+
+| **hfx3**                    | Heat flux in     |
+|                             | z-direction.     |
+|                             | Only available   |
+|                             | with Z surface   |
+|                             | layers enabled   |
+|                             | [W/m^2]          |
++-----------------------------+------------------+
+| **q1fx1**                   | Moisture flux 1  |
+|                             | in x-direction.  |
+|                             | Written when     |
+|                             | requested with   |
+|                             | moisture enabled.|
+|                             | Nonzero with X   |
+|                             | surface layer or |
+|                             | rotated zlo flux;|
+|                             | zero otherwise.  |
+|                             | Surface-layer    |
+|                             | flux, not the    |
+|                             | full horizontal  |
+|                             | diffusive flux.  |
+|                             | [kg/m^2/s]       |
++-----------------------------+------------------+
+| **q1fx2**                   | Moisture flux 1  |
+|                             | in y-direction.  |
+|                             | Written when     |
+|                             | requested with   |
+|                             | moisture enabled.|
+|                             | Nonzero with Y   |
+|                             | surface layer or |
+|                             | rotated zlo flux;|
+|                             | zero otherwise.  |
+|                             | Surface-layer    |
+|                             | flux, not the    |
+|                             | full horizontal  |
+|                             | diffusive flux.  |
+|                             | [kg/m^2/s]       |
++-----------------------------+------------------+
+| **q1fx3**                   | Moisture flux 1  |
+|                             | in z-direction.  |
+|                             | Only available   |
+|                             | with Z surface   |
+|                             | layers and       |
+|                             | moisture enabled |
+|                             | [kg/m^2/s]       |
++-----------------------------+------------------+
+| **q2fx3**                   | Moisture flux 2  |
+|                             | in z-direction.  |
+|                             | Only available   |
+|                             | with Z surface   |
+|                             | layers and       |
+|                             | moisture enabled |
+|                             | [kg/m^2/s]       |
++-----------------------------+------------------+
+
+The horizontal surface-layer flux variables ``hfx1``, ``hfx2``,
+``q1fx1``, and ``q1fx2`` do not represent the complete horizontal
+diffusive flux. Without a corresponding lateral surface layer or a
+rotated zlo surface flux, these variables are written as zero.
+
+The ``ibseb_*`` fields are selected only when the immersed-boundary surface
+energy balance is on (``erf.ibseb.enable = true``); without it the names are
+dropped from the stream silently. Each is the mean over the wall faces that
+touch the cell (up to three at an outside corner, six in a one-cell slot) and
+zero where the cell touches none, so they are face diagnostics scattered onto
+cells rather than cell-centred fields.
 
 The ``qrain``, ``qsnow``, and ``qgraup`` rows are available when the active
 moisture scheme provides the corresponding rain, snow, or graupel component.
@@ -675,6 +897,13 @@ every AMR level in the plotfile:
 * ``qsrc_sw`` and ``qsrc_lw`` require a non-``None`` radiation choice.
 * ``nut``, ``Kmv``, ``Kmh``, ``Khv``, ``Khh``, and ``Lturb`` require
   ``use_kturb = true`` at every AMR level.
+* ``Rt``, ``cmu``, and ``cmu_prime`` also require ``use_kturb = true`` at every
+  AMR level, because they are stored in the eddy-diffusivity container. They are
+  written only by the one-equation k RANS closure, so they are identically zero
+  unless ``erf.rans_type = kEqn`` is active on the level. ``Rt`` is the smoothed
+  turbulent Richardson number and ``cmu``/``cmu_prime`` are the momentum and
+  scalar stability functions of Axell & Liungman (2001), Eqs. 29-32; all three
+  are dimensionless.
 * ``diss`` requires molecular diffusion or ``use_kturb`` at every level.
 * ``walldist`` requires a non-``None`` RANS choice at every level.
 

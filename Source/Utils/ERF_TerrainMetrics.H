@@ -5,7 +5,8 @@
 #include <AMReX_Geometry.H>
 #include <AMReX_MultiFab.H>
 #include <ERF_IndexDefines.H>
-#include <ERF_Constants.H>
+#include <cmath>
+#include <ERF_NumericalConstants.H>
 
 /**
  * Routine to define default z_phys_nd and z_phys_cc
@@ -1035,6 +1036,7 @@ void
 rotate_scalar_flux (const int& i,
                     const int& j,
                     const int& klo,
+                    const int& /*dir*/,
                     const amrex::Real& flux,
                     const amrex::GpuArray<amrex::Real, AMREX_SPACEDIM>& dxInv,
                     const amrex::Array4<const amrex::Real>& zphys_arr,
@@ -1078,6 +1080,7 @@ void
 rotate_stress_tensor (const int& i,
                       const int& j,
                       const int& klo,
+                      const int& /*dir*/,
                       const amrex::Real& flux,
                       const amrex::GpuArray<amrex::Real, AMREX_SPACEDIM>& dxInv,
                       const amrex::Array4<const amrex::Real>& zphys_arr,
