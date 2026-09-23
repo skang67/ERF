@@ -17,6 +17,16 @@ init_default_zphys (int lev, const amrex::Geometry& geom,
                     amrex::Real z_offset = zero);
 
 /**
+ * The cells of a (cell-centered) BoxArray as boxes that are never stacked on each other:
+ * wherever a box sits on the top face of another, the run of cells in z that the two belong
+ * to becomes a single box.  Returns ba itself when no two boxes of ba are stacked.
+ *
+ * @param[in] ba cell-centered BoxArray
+ */
+amrex::BoxArray
+join_boxes_stacked_in_z (const amrex::BoxArray& ba);
+
+/**
  * Utility routines for constructing terrain metric terms
  */
 
@@ -735,7 +745,7 @@ Compute_Z_AtWFace (const int &i, const int &j, const int &k,
  * @param[in] z_nd Nodal physical height field.
  * @return Relative height at cell center.
  */
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST_DEVICE
 AMREX_FORCE_INLINE
 amrex::Real
 Compute_Zrel_AtCellCenter (const int &i, const int &j, const int &k,

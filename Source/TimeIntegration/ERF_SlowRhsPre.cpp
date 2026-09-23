@@ -326,11 +326,18 @@ void erf_slow_rhs_pre (int level, int finest_level,
     BL_PROFILE("slow_rhs_making_omega");
     for ( MFIter mfi(S_data[IntVars::cons],TileNoZ()); mfi.isValid(); ++mfi)
     {
-        Box bx  = mfi.tilebox();
-
         IntVect nGrowVect = (l_use_eb)
                             ? IntVect(AMREX_D_DECL(2, 2, 2)) : IntVect(AMREX_D_DECL(1, 1, 1));
-        Box gbxo = surroundingNodes(bx,2); gbxo.grow(nGrowVect);
+
+        //
+        // NOTE: grownnodaltilebox, not surroundingNodes(tilebox,2) grown by hand.  The latter
+        //       grows every tile past its own share of the grid, so once the grid is tiled two
+        //       tiles write the same Omega cells -- under OpenMP that is a concurrent write to
+        //       the same memory, i.e. a data race, even though both threads happen to store the
+        //       same value.  grownnodaltilebox hands each tile a disjoint piece of the grown
+        //       nodal box, and is identical to the old expression when there is one tile per grid.
+        //
+        Box gbxo = mfi.grownnodaltilebox(2,nGrowVect);
 
         const Array4<const Real>& rho_u = S_data[IntVars::xmom].array(mfi);
         const Array4<const Real>& rho_v = S_data[IntVars::ymom].array(mfi);
@@ -430,12 +437,7 @@ void erf_slow_rhs_pre (int level, int finest_level,
         }
 
         // We don't compute a source term for z-momentum on the bottom or top domain boundary
-        if (tbz.smallEnd(2) == domain.smallEnd(2)) {
-            tbz.growLo(2,-1);
-        }
-        if (tbz.bigEnd(2) == domain.bigEnd(2)+1) {
-            tbz.growHi(2,-1);
-        }
+        tbz = ShrinkZmomBoxAtDomainEnds(tbz, domain);
 
         const Array4<const Real> & cell_data  = S_data[IntVars::cons].array(mfi);
         const Array4<const Real> & cell_prim  = S_prim.array(mfi);
@@ -771,7 +773,7 @@ void erf_slow_rhs_pre (int level, int finest_level,
         int lo_z_face = domain.smallEnd(2);
         int hi_z_face = domain.bigEnd(2)+1;
 
-        AdvectionSrcForMom(mfi, bx, tbx, tby, tbz, tbx_grown, tby_grown, tbz_grown,
+        AdvectionSrcForMom(mfi, tbx, tby, tbz, tbx_grown, tby_grown, tbz_grown,
                            rho_u_rhs, rho_v_rhs, rho_w_rhs,
                            cell_data, u, v, w,
                            rho_u, rho_v, omega_arr,

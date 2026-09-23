@@ -30,13 +30,15 @@ make_parallel_geometry ()
 }
 
 inline BoxArray
-make_parallel_box_array (const Box& domain, const bool single_box = false)
+make_parallel_box_array (const Box& domain, const bool single_box = false,
+                         const IntVect& max_size = IntVect(AMREX_D_DECL(16, 16, 1024)))
 {
     BoxArray ba(domain);
     if (single_box) { return ba; }
-    // Lateral boxes span the full vertical domain, as required by the x/y
-    // surface-layer kernels, while still distributing the face ownership.
-    ba.maxSize(IntVect(AMREX_D_DECL(16, 16, 1024)));
+    // By default lateral boxes span the full vertical domain, as required by
+    // the x/y surface-layer kernels, while still distributing the face
+    // ownership.  A smaller z size stacks boxes in z (z-face layers only).
+    ba.maxSize(max_size);
     return ba;
 }
 
@@ -48,14 +50,18 @@ make_parallel_distribution_mapping (const BoxArray& ba)
     if (nprocs > 1) {
         for (int ibox = 0; ibox < ba.size(); ++ibox) {
             if (nprocs == 2) {
-                // The two lateral neighbors of every selected face must be
-                // assigned to different ranks.  This checkerboard mapping
-                // achieves that for both x and y faces.
+                // Boxes 0 to 3 are the four lateral quarters of the domain in
+                // both layouts, so this checkerboard assigns the two lateral
+                // neighbors of every selected face to different ranks, for both
+                // x and y faces.  In the z-split layout the boxes stacked above
+                // them follow and all land on rank 1, which leaves the duplicate
+                // planar boxes of quarters 0 and 3 on the other rank from their
+                // surface copy.
                 pmap[ibox] = (ibox == 0 || ibox == 3) ? 0 : 1;
             } else {
-                // With at least three ranks, assign the four-box layout to
-                // distinct ranks where possible.  This also works when more
-                // ranks are present than boxes; unused ranks are harmless.
+                // With at least three ranks, spread the boxes over distinct
+                // ranks where possible.  This also works when more ranks are
+                // present than boxes; unused ranks are harmless.
                 pmap[ibox] = ibox % nprocs;
             }
         }
@@ -158,6 +164,8 @@ struct SurfaceLayerFields
     MultiFab yvel;
     MultiFab zvel;
     std::unique_ptr<MultiFab> theta;
+    std::unique_ptr<MultiFab> coupled_sst;
+    std::unique_ptr<iMultiFab> coupled_valid;
     Vector<std::unique_ptr<MultiFab>> qv_prim;
     Vector<std::unique_ptr<iMultiFab>> lmask;
     std::unique_ptr<MultiFab> no_walldist;
@@ -170,10 +178,18 @@ struct SurfaceLayerFields
     MultiFab zqv_flux;
     Vector<MultiFab*> state;
 
-    explicit SurfaceLayerFields (const bool single_box = false)
+    explicit SurfaceLayerFields (const bool single_box = false,
+                                 const IntVect& max_size = IntVect(AMREX_D_DECL(16, 16, 1024)))
+        : SurfaceLayerFields(make_parallel_box_array(make_parallel_geometry().Domain(),
+                                                     single_box, max_size))
+    {}
+
+    // Any grids inside the domain: they need not cover it (a refined level of partial
+    // height, boxes aloft)
+    explicit SurfaceLayerFields (const BoxArray& grids)
         : geom(make_parallel_geometry()),
           domain(geom.Domain()),
-          ba(make_parallel_box_array(domain, single_box)),
+          ba(grids),
           dm(make_parallel_distribution_mapping(ba)),
           cons(ba, dm, RhoQ1_comp + 1,
                IntVect(AMREX_D_DECL(test_state_ng, test_state_ng, 1))),
@@ -265,6 +281,20 @@ struct SurfaceLayerFields
         Gpu::streamSynchronize();
     }
 
+    void set_surface_cell_pressure (const Real pressure, const Real qv = Real(0.0))
+    {
+        const Real rho_theta = (p_0 / R_d) *
+            std::pow(pressure / p_0, Real(1.0) / Gamma) /
+            (Real(1.0) + RvoRd * qv);
+        for (MFIter mfi(cons, false); mfi.isValid(); ++mfi) {
+            auto& fab = cons[mfi];
+            fab.setVal<RunOn::Device>(test_rho, fab.box(), Rho_comp, 1);
+            fab.setVal<RunOn::Device>(rho_theta, fab.box(), RhoTheta_comp, 1);
+            fab.setVal<RunOn::Device>(test_rho * qv, fab.box(), RhoQ1_comp, 1);
+        }
+        Gpu::streamSynchronize();
+    }
+
     std::unique_ptr<SurfaceLayer>
     prepare_layer (const Orientation face,
                    const GpuArray<int, AMREX_SPACEDIM*2>& active,
@@ -272,7 +302,9 @@ struct SurfaceLayerFields
                    const bool with_moisture = false,
                    const bool varying_inputs = false,
                    const bool seed_outputs = false,
-                   const bool update_fluxes = true)
+                   const bool update_fluxes = true,
+                   const std::string& sfc_file = "",
+                   const bool coupled_active = false)
     {
         Vector<Geometry> geoms{geom};
         Vector<std::unique_ptr<MultiFab>> z_phys_nd(1);
@@ -288,12 +320,28 @@ struct SurfaceLayerFields
             set_varying_surface_temperature();
             set_varying_surface_humidity();
         }
+        if (!sfc_file.empty()) {
+            ParmParse pp(prefix);
+            pp.add("most.use_sfc_sst", true);
+            pp.add("most.sfc_file", sfc_file);
+        }
         bool rotate = false;
         auto layer = std::make_unique<SurfaceLayer>(
             face, geoms, rotate, prefix, qv_prim, z_phys_nd,
             Vector<Vector<Real>>{},
-            MeshType::ConstantDz, TerrainType::None, TurbChoice{}, 0.0, 0.0);
+            MeshType::ConstantDz, TerrainType::None, TurbChoice{}, RdoCp, 0.0, 0.0);
         layer->set_surface_layer_faces(active);
+        if (coupled_active) {
+            layer->set_coupled_sst_active(true);
+            coupled_sst = std::make_unique<MultiFab>(
+                collapse_z(ba), dm, 1,
+                IntVect(AMREX_D_DECL(0, 0, 0)));
+            coupled_sst->setVal(Real(290.0));
+            coupled_valid = std::make_unique<iMultiFab>(
+                collapse_z(ba), dm, 1,
+                IntVect(AMREX_D_DECL(0, 0, 0)));
+            coupled_valid->setVal(0);
+        }
 
         std::unique_ptr<MultiFab> qr_prim;
         Vector<MultiFab*> empty_mfs;
@@ -304,6 +352,9 @@ struct SurfaceLayerFields
             0, 1, state, theta, qv_prim[0], qr_prim, z_phys_nd[0],
             nullptr, nullptr, nullptr, empty_mfs, empty_names,
             empty_mfs, empty_names, sst, tsk, lmask);
+        if (coupled_active) {
+            layer->update_coupled_sst_ptr(0, coupled_sst.get(), coupled_valid.get());
+        }
         if (seed_outputs) {
             set_fab_values(*layer->get_u_star(0), u_star_seed);
             set_fab_values(*layer->get_t_star(0), t_star_seed);
@@ -405,8 +456,10 @@ tangential_halo_pairs (const MultiFab& mf,
 {
     std::vector<TangentialHaloPair> result;
     const int dir = face.coordDir();
-    if (dir == 2) { return result; }
-    const int tangent_dir = 1 - dir;
+    // For a horizontal surface, the first lateral direction is sufficient to
+    // expose the internal exchange. Lateral faces use their other horizontal
+    // direction as the tangent.
+    const int tangent_dir = (dir == 2) ? 0 : 1 - dir;
     const BoxArray& target_ba = mf.boxArray();
 
     for (int ibox = 0; ibox < target_ba.size(); ++ibox) {
