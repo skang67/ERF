@@ -11,13 +11,10 @@
 
 #include <AMReX_EB2.H>
 #include <AMReX_EBFabFactory.H>
-#include <AMReX_BaseFab.H>
 #include <AMReX_Dim3.H>
 #include <AMReX_GpuContainers.H>
 
 #include <ERF_EBAux.H>
-
-#include <cstdint>
 
 /**
  * \brief Owns and exposes cell-centered and face-centered EB factories.
@@ -31,8 +28,6 @@ class eb_ {
   public:
 
     using CutCellList = amrex::Gpu::DeviceVector<amrex::Dim3>;
-    using UpwindAvailability =
-        amrex::FabArray<amrex::BaseFab<std::uint8_t>>;
 
     //! Destroy the EB factory manager.
     ~eb_ ();
@@ -125,27 +120,6 @@ class eb_ {
         return m_w_cut_cells[grid_index];
     }
 
-    //! Return packed signed stencil availability on the x-momentum grid.
-    [[nodiscard]] UpwindAvailability const&
-    get_u_upwind_availability () const noexcept
-    {
-        return m_u_upwind_availability;
-    }
-
-    //! Return packed signed stencil availability on the y-momentum grid.
-    [[nodiscard]] UpwindAvailability const&
-    get_v_upwind_availability () const noexcept
-    {
-        return m_v_upwind_availability;
-    }
-
-    //! Return packed signed stencil availability on the z-momentum grid.
-    [[nodiscard]] UpwindAvailability const&
-    get_w_upwind_availability () const noexcept
-    {
-        return m_w_upwind_availability;
-    }
-
     //! Return the cell-centered EB factory.
     const std::unique_ptr<amrex::EBFArrayBoxFactory>& get_const_factory () const noexcept { return m_factory; }
 
@@ -214,12 +188,6 @@ class eb_ {
     amrex::Vector<CutCellList> m_u_cut_cells;
     amrex::Vector<CutCellList> m_v_cut_cells;
     amrex::Vector<CutCellList> m_w_cut_cells;
-
-    // One component per flux direction. Each byte packs positive- and
-    // negative-flow availability in bits [1:0] and [3:2], respectively.
-    UpwindAvailability m_u_upwind_availability;
-    UpwindAvailability m_v_upwind_availability;
-    UpwindAvailability m_w_upwind_availability;
 
     void build_cut_cell_lists (
         amrex::FabArray<amrex::EBCellFlagFab> const& flags,

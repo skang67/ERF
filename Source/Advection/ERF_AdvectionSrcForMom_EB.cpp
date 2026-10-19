@@ -117,8 +117,6 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
     auto const* u_factory = ebfact.get_u_const_factory();
     const auto& u_flag_fab = u_factory->getMultiEBCellFlagFab()[mfi];
     Array4<const EBCellFlag> u_cflag = u_flag_fab.const_array();
-    Array4<const std::uint8_t> u_upwind_availability =
-        ebfact.get_u_upwind_availability().const_array(mfi);
     Array4<const Real> u_vfrac = u_factory->getVolFrac().const_array(mfi);
     Array4<const Real> u_afrac_x{};
     Array4<const Real> u_afrac_y{};
@@ -141,8 +139,6 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
     auto const* v_factory = ebfact.get_v_const_factory();
     const auto& v_flag_fab = v_factory->getMultiEBCellFlagFab()[mfi];
     Array4<const EBCellFlag> v_cflag = v_flag_fab.const_array();
-    Array4<const std::uint8_t> v_upwind_availability =
-        ebfact.get_v_upwind_availability().const_array(mfi);
     Array4<const Real> v_vfrac = v_factory->getVolFrac().const_array(mfi);
     Array4<const Real> v_afrac_x{};
     Array4<const Real> v_afrac_y{};
@@ -164,8 +160,6 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
     auto const* w_factory = ebfact.get_w_const_factory();
     const auto& w_flag_fab = w_factory->getMultiEBCellFlagFab()[mfi];
     Array4<const EBCellFlag> w_cflag = w_flag_fab.const_array();
-    Array4<const std::uint8_t> w_upwind_availability =
-        ebfact.get_w_upwind_availability().const_array(mfi);
     Array4<const Real> w_vfrac = w_factory->getVolFrac().const_array(mfi);
     Array4<const Real> w_afrac_x{};
     Array4<const Real> w_afrac_y{};
@@ -325,9 +319,6 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
                                                 rho_u, rho_v, omega, u, v, w,
                                                 u_type, v_type, w_type,
                                                 u_flag_fab, v_flag_fab, w_flag_fab,
-                                                u_upwind_availability,
-                                                v_upwind_availability,
-                                                w_upwind_availability,
                                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -341,9 +332,6 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
                                                 rho_u, rho_v, omega, u, v, w,
                                                 u_type, v_type, w_type,
                                                 u_flag_fab, v_flag_fab, w_flag_fab,
-                                                u_upwind_availability,
-                                                v_upwind_availability,
-                                                w_upwind_availability,
                                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -357,9 +345,6 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
                                                 rho_u, rho_v, omega, u, v, w,
                                                 u_type, v_type, w_type,
                                                 u_flag_fab, v_flag_fab, w_flag_fab,
-                                                u_upwind_availability,
-                                                v_upwind_availability,
-                                                w_upwind_availability,
                                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -373,9 +358,6 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
                                                 rho_u, rho_v, omega, u, v, w,
                                                 u_type, v_type, w_type,
                                                 u_flag_fab, v_flag_fab, w_flag_fab,
-                                                u_upwind_availability,
-                                                v_upwind_availability,
-                                                w_upwind_availability,
                                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -389,9 +371,6 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
                                                 rho_u, rho_v, omega, u, v, w,
                                                 u_type, v_type, w_type,
                                                 u_flag_fab, v_flag_fab, w_flag_fab,
-                                                u_upwind_availability,
-                                                v_upwind_availability,
-                                                w_upwind_availability,
                                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,

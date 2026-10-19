@@ -5,13 +5,7 @@
 #include <ERF_IndexDefines.H>
 #include <ERF_Interpolation.H>
 
-#include <AMReX_GpuAssert.H>
-
-#include <cstdint>
-
 namespace erf_advection_detail {
-
-constexpr int max_upwind_availability = 3;
 
 /**
  * \brief Return whether the complete directional interpolation footprint is regular.
@@ -33,75 +27,6 @@ momentum_stencil_is_regular (const amrex::EBCellFlagFab& flag_fab,
     return flag_fab.box().contains(stencil_box) &&
            flag_fab.getType(stencil_box) == amrex::FabType::regular;
 }
-
-/**
- * \brief Decode the signed availability count and clamp it to the active scheme.
- *
- * Bits [1:0] hold positive-flow availability and bits [3:2] hold
- * negative-flow availability. Keeping separate sign comparisons preserves the
- * existing zero and unordered/NaN behavior.
- */
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-int
-decode_upwind_availability (const std::uint8_t packed,
-                            const amrex::Real mass_flux,
-                            const int requested_cells) noexcept
-{
-    int available = 0;
-    if (mass_flux > zero) {
-        available = static_cast<int>(packed & std::uint8_t(0x3));
-    } else if (mass_flux < zero) {
-        available = static_cast<int>((packed >> 2) & std::uint8_t(0x3));
-    }
-    return (available < requested_cells) ? available : requested_cells;
-}
-
-#ifdef AMREX_DEBUG
-/** Return the legacy per-flux scan result for metadata validation. */
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-int
-scan_upwind_availability (
-    const amrex::Array4<const amrex::EBCellFlag>& flag,
-    const int i, const int j, const int k, const int dir,
-    const amrex::Real mass_flux, const int requested_cells) noexcept
-{
-    int available = 0;
-    if (mass_flux > zero) {
-        for (int offset = 0; offset < requested_cells; ++offset) {
-            int const stride = offset + 1;
-            int const ii = i - ((dir == 0) ? stride : 0);
-            int const jj = j - ((dir == 1) ? stride : 0);
-            int const kk = k - ((dir == 2) ? stride : 0);
-            if (flag(ii,jj,kk).isCovered()) {
-                break;
-            }
-            ++available;
-        }
-    } else if (mass_flux < zero) {
-        for (int offset = 0; offset < requested_cells; ++offset) {
-            int const ii = i + ((dir == 0) ? offset : 0);
-            int const jj = j + ((dir == 1) ? offset : 0);
-            int const kk = k + ((dir == 2) ? offset : 0);
-            if (flag(ii,jj,kk).isCovered()) {
-                break;
-            }
-            ++available;
-        }
-    }
-    return available;
-}
-
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-void
-assert_upwind_availability (const bool matches) noexcept
-{
-#if defined(AMREX_USE_CUDA) || defined(AMREX_USE_HIP) || defined(AMREX_USE_SYCL)
-    AMREX_DEVICE_ASSERT(matches);
-#else
-    AMREX_ASSERT(matches);
-#endif
-}
-#endif
 
 } // namespace erf_advection_detail
 
@@ -132,9 +57,6 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                             const amrex::EBCellFlagFab& u_flag_fab,
                             const amrex::EBCellFlagFab& v_flag_fab,
                             const amrex::EBCellFlagFab& w_flag_fab,
-                            const amrex::Array4<const std::uint8_t>& u_upwind_availability,
-                            const amrex::Array4<const std::uint8_t>& v_upwind_availability,
-                            const amrex::Array4<const std::uint8_t>& w_upwind_availability,
                             const amrex::Array4<const amrex::EBCellFlag>& u_cflag,
                             const amrex::Array4<const amrex::Real>& u_afrac_x,
                             const amrex::Array4<const amrex::Real>& u_afrac_y,
@@ -171,13 +93,6 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
     const int ncells_v_vert = interp_v_vert.GetUpwindCellNumber();
     const int ncells_w_horz = interp_w_horz.GetUpwindCellNumber();
     const int ncells_w_vert = interp_w_vert.GetUpwindCellNumber();
-
-    AMREX_ALWAYS_ASSERT(ncells_u_horz <= erf_advection_detail::max_upwind_availability);
-    AMREX_ALWAYS_ASSERT(ncells_u_vert <= erf_advection_detail::max_upwind_availability);
-    AMREX_ALWAYS_ASSERT(ncells_v_horz <= erf_advection_detail::max_upwind_availability);
-    AMREX_ALWAYS_ASSERT(ncells_v_vert <= erf_advection_detail::max_upwind_availability);
-    AMREX_ALWAYS_ASSERT(ncells_w_horz <= erf_advection_detail::max_upwind_availability);
-    AMREX_ALWAYS_ASSERT(ncells_w_vert <= erf_advection_detail::max_upwind_availability);
 
     const int horizontal_stencil_size = interp_u_horz.GetUpwindCellNumber();
     const int vertical_stencil_size = interp_u_vert.GetUpwindCellNumber();
@@ -259,14 +174,24 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                 if (rho_u_avg > zero || rho_u_avg < zero) {
                     icell = ncells_u_horz;
                 }
-            } else {
-                icell = erf_advection_detail::decode_upwind_availability(
-                    u_upwind_availability(i,j,k,0), rho_u_avg, ncells_u_horz);
-#ifdef AMREX_DEBUG
-                erf_advection_detail::assert_upwind_availability(
-                    icell == erf_advection_detail::scan_upwind_availability(
-                        u_cflag, i, j, k, 0, rho_u_avg, ncells_u_horz));
-#endif
+            }
+            else if (rho_u_avg>zero)
+            {
+                for (int ii=0; ii<ncells_u_horz; ++ii) {
+                    if (u_cflag(i-ii-1,j,k).isCovered()) {
+                        break;
+                    }
+                    icell++;
+                }
+            }
+            else if (rho_u_avg<zero)
+            {
+                for (int ii=0; ii<ncells_u_horz; ++ii) {
+                    if (u_cflag(i+ii,j,k).isCovered()) {
+                        break;
+                    }
+                    icell++;
+                }
             }
 
             // Interpolate u using the highest-order scheme
@@ -304,14 +229,24 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                 if (rho_v_avg > zero || rho_v_avg < zero) {
                     jcell = ncells_u_horz;
                 }
-            } else {
-                jcell = erf_advection_detail::decode_upwind_availability(
-                    u_upwind_availability(i,j,k,1), rho_v_avg, ncells_u_horz);
-#ifdef AMREX_DEBUG
-                erf_advection_detail::assert_upwind_availability(
-                    jcell == erf_advection_detail::scan_upwind_availability(
-                        u_cflag, i, j, k, 1, rho_v_avg, ncells_u_horz));
-#endif
+            }
+            else if (rho_v_avg>zero)
+            {
+                for (int jj=0; jj<ncells_u_horz; ++jj) {
+                    if (u_cflag(i,j-jj-1,k).isCovered()) {
+                        break;
+                    }
+                    jcell++;
+                }
+            }
+            else if (rho_v_avg<zero)
+            {
+                for (int jj=0; jj<ncells_u_horz; ++jj) {
+                    if (u_cflag(i,j+jj,k).isCovered()) {
+                        break;
+                    }
+                    jcell++;
+                }
             }
 
             // Interpolate u using the highest-order scheme
@@ -349,14 +284,24 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                 if (rho_w_avg > zero || rho_w_avg < zero) {
                     kcell = ncells_u_vert;
                 }
-            } else {
-                kcell = erf_advection_detail::decode_upwind_availability(
-                    u_upwind_availability(i,j,k,2), rho_w_avg, ncells_u_vert);
-#ifdef AMREX_DEBUG
-                erf_advection_detail::assert_upwind_availability(
-                    kcell == erf_advection_detail::scan_upwind_availability(
-                        u_cflag, i, j, k, 2, rho_w_avg, ncells_u_vert));
-#endif
+            }
+            else if (rho_w_avg>zero)
+            {
+                for (int kk=0; kk<ncells_u_vert; ++kk) {
+                    if (u_cflag(i,j,k-kk-1).isCovered()) {
+                        break;
+                    }
+                    kcell++;
+                }
+            }
+            else if (rho_w_avg<zero)
+            {
+                for (int kk=0; kk<ncells_u_vert; ++kk) {
+                    if (u_cflag(i,j,k+kk).isCovered()) {
+                        break;
+                    }
+                    kcell++;
+                }
             }
 
             // Interpolate u using the highest-order scheme
@@ -400,14 +345,24 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                 if (rho_u_avg > zero || rho_u_avg < zero) {
                     icell = ncells_v_horz;
                 }
-            } else {
-                icell = erf_advection_detail::decode_upwind_availability(
-                    v_upwind_availability(i,j,k,0), rho_u_avg, ncells_v_horz);
-#ifdef AMREX_DEBUG
-                erf_advection_detail::assert_upwind_availability(
-                    icell == erf_advection_detail::scan_upwind_availability(
-                        v_cflag, i, j, k, 0, rho_u_avg, ncells_v_horz));
-#endif
+            }
+            else if (rho_u_avg>zero)
+            {
+                for (int ii=0; ii<ncells_v_horz; ++ii) {
+                    if (v_cflag(i-ii-1,j,k).isCovered()) {
+                        break;
+                    }
+                    icell++;
+                }
+            }
+            else if (rho_u_avg<zero)
+            {
+                for (int ii=0; ii<ncells_v_horz; ++ii) {
+                    if (v_cflag(i+ii,j,k).isCovered()) {
+                        break;
+                    }
+                    icell++;
+                }
             }
 
             // Interpolate v using the highest-order scheme
@@ -445,14 +400,24 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                 if (rho_v_avg > zero || rho_v_avg < zero) {
                     jcell = ncells_v_horz;
                 }
-            } else {
-                jcell = erf_advection_detail::decode_upwind_availability(
-                    v_upwind_availability(i,j,k,1), rho_v_avg, ncells_v_horz);
-#ifdef AMREX_DEBUG
-                erf_advection_detail::assert_upwind_availability(
-                    jcell == erf_advection_detail::scan_upwind_availability(
-                        v_cflag, i, j, k, 1, rho_v_avg, ncells_v_horz));
-#endif
+            }
+            else if (rho_v_avg>zero)
+            {
+                for (int jj=0; jj<ncells_v_horz; ++jj) {
+                    if (v_cflag(i,j-jj-1,k).isCovered()) {
+                        break;
+                    }
+                    jcell++;
+                }
+            }
+            else if (rho_v_avg<zero)
+            {
+                for (int jj=0; jj<ncells_v_horz; ++jj) {
+                    if (v_cflag(i,j+jj,k).isCovered()) {
+                        break;
+                    }
+                    jcell++;
+                }
             }
 
             // Interpolate v using the highest-order scheme
@@ -490,14 +455,24 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                 if (rho_w_avg > zero || rho_w_avg < zero) {
                     kcell = ncells_v_vert;
                 }
-            } else {
-                kcell = erf_advection_detail::decode_upwind_availability(
-                    v_upwind_availability(i,j,k,2), rho_w_avg, ncells_v_vert);
-#ifdef AMREX_DEBUG
-                erf_advection_detail::assert_upwind_availability(
-                    kcell == erf_advection_detail::scan_upwind_availability(
-                        v_cflag, i, j, k, 2, rho_w_avg, ncells_v_vert));
-#endif
+            }
+            else if (rho_w_avg>zero)
+            {
+                for (int kk=0; kk<ncells_v_vert; ++kk) {
+                    if (v_cflag(i,j,k-kk-1).isCovered()) {
+                        break;
+                    }
+                    kcell++;
+                }
+            }
+            else if (rho_w_avg<zero)
+            {
+                for (int kk=0; kk<ncells_v_vert; ++kk) {
+                    if (v_cflag(i,j,k+kk).isCovered()) {
+                        break;
+                    }
+                    kcell++;
+                }
             }
 
             // Interpolate v using the highest-order scheme
@@ -541,14 +516,24 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                 if (rho_u_avg > zero || rho_u_avg < zero) {
                     icell = ncells_w_horz;
                 }
-            } else {
-                icell = erf_advection_detail::decode_upwind_availability(
-                    w_upwind_availability(i,j,k,0), rho_u_avg, ncells_w_horz);
-#ifdef AMREX_DEBUG
-                erf_advection_detail::assert_upwind_availability(
-                    icell == erf_advection_detail::scan_upwind_availability(
-                        w_cflag, i, j, k, 0, rho_u_avg, ncells_w_horz));
-#endif
+            }
+            else if (rho_u_avg>zero)
+            {
+                for (int ii=0; ii<ncells_w_horz; ++ii) {
+                    if (w_cflag(i-ii-1,j,k).isCovered()) {
+                        break;
+                    }
+                    icell++;
+                }
+            }
+            else if (rho_u_avg<zero)
+            {
+                for (int ii=0; ii<ncells_w_horz; ++ii) {
+                    if (w_cflag(i+ii,j,k).isCovered()) {
+                        break;
+                    }
+                    icell++;
+                }
             }
 
             // Interpolate w using the highest-order scheme
@@ -586,14 +571,24 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                 if (rho_v_avg > zero || rho_v_avg < zero) {
                     jcell = ncells_w_horz;
                 }
-            } else {
-                jcell = erf_advection_detail::decode_upwind_availability(
-                    w_upwind_availability(i,j,k,1), rho_v_avg, ncells_w_horz);
-#ifdef AMREX_DEBUG
-                erf_advection_detail::assert_upwind_availability(
-                    jcell == erf_advection_detail::scan_upwind_availability(
-                        w_cflag, i, j, k, 1, rho_v_avg, ncells_w_horz));
-#endif
+            }
+            else if (rho_v_avg>zero)
+            {
+                for (int jj=0; jj<ncells_w_horz; ++jj) {
+                    if (w_cflag(i,j-jj-1,k).isCovered()) {
+                        break;
+                    }
+                    jcell++;
+                }
+            }
+            else if (rho_v_avg<zero)
+            {
+                for (int jj=0; jj<ncells_w_horz; ++jj) {
+                    if (w_cflag(i,j+jj,k).isCovered()) {
+                        break;
+                    }
+                    jcell++;
+                }
             }
 
             // Interpolate w using the highest-order scheme
@@ -636,14 +631,24 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                     if (rho_w_avg > zero || rho_w_avg < zero) {
                         kcell = ncells_w_vert;
                     }
-                } else {
-                    kcell = erf_advection_detail::decode_upwind_availability(
-                        w_upwind_availability(i,j,k,2), rho_w_avg, ncells_w_vert);
-#ifdef AMREX_DEBUG
-                    erf_advection_detail::assert_upwind_availability(
-                        kcell == erf_advection_detail::scan_upwind_availability(
-                            w_cflag, i, j, k, 2, rho_w_avg, ncells_w_vert));
-#endif
+                }
+                else if (rho_w_avg>zero)
+                {
+                    for (int kk=0; kk<ncells_w_vert; ++kk) {
+                        if (w_cflag(i,j,k-kk-1).isCovered()) {
+                            break;
+                        }
+                        kcell++;
+                    }
+                }
+                else if (rho_w_avg<zero)
+                {
+                    for (int kk=0; kk<ncells_w_vert; ++kk) {
+                        if (w_cflag(i,j,k+kk).isCovered()) {
+                            break;
+                        }
+                        kcell++;
+                    }
                 }
 
                 // Adjust available cell numbers near the top and bottom boundaries
@@ -698,9 +703,6 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                         const amrex::EBCellFlagFab& u_flag_fab,
                         const amrex::EBCellFlagFab& v_flag_fab,
                         const amrex::EBCellFlagFab& w_flag_fab,
-                        const amrex::Array4<const std::uint8_t>& u_upwind_availability,
-                        const amrex::Array4<const std::uint8_t>& v_upwind_availability,
-                        const amrex::Array4<const std::uint8_t>& w_upwind_availability,
                         const amrex::Array4<const amrex::EBCellFlag>& u_cflag,
                         const amrex::Array4<const amrex::Real>& u_afrac_x,
                         const amrex::Array4<const amrex::Real>& u_afrac_y,
@@ -731,9 +733,6 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                                 rho_u, rho_v, rho_w, u, v, w,
                                 u_type, v_type, w_type,
                                 u_flag_fab, v_flag_fab, w_flag_fab,
-                                u_upwind_availability,
-                                v_upwind_availability,
-                                w_upwind_availability,
                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -748,9 +747,6 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                                 rho_u, rho_v, rho_w, u, v, w,
                                 u_type, v_type, w_type,
                                 u_flag_fab, v_flag_fab, w_flag_fab,
-                                u_upwind_availability,
-                                v_upwind_availability,
-                                w_upwind_availability,
                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -765,9 +761,6 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                                 rho_u, rho_v, rho_w, u, v, w,
                                 u_type, v_type, w_type,
                                 u_flag_fab, v_flag_fab, w_flag_fab,
-                                u_upwind_availability,
-                                v_upwind_availability,
-                                w_upwind_availability,
                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -782,9 +775,6 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                                 rho_u, rho_v, rho_w, u, v, w,
                                 u_type, v_type, w_type,
                                 u_flag_fab, v_flag_fab, w_flag_fab,
-                                u_upwind_availability,
-                                v_upwind_availability,
-                                w_upwind_availability,
                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -799,9 +789,6 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                                 rho_u, rho_v, rho_w, u, v, w,
                                 u_type, v_type, w_type,
                                 u_flag_fab, v_flag_fab, w_flag_fab,
-                                u_upwind_availability,
-                                v_upwind_availability,
-                                w_upwind_availability,
                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
