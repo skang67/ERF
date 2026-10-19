@@ -3,6 +3,26 @@
 
 #include "ERF_DataStruct.H"
 
+namespace erf_interpolation_detail {
+
+template<int Dir>
+AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+amrex::Real
+directional_value (const amrex::Array4<const amrex::Real>& phi,
+                   int i, int j, int k, int n, int offset) noexcept
+{
+    static_assert(Dir >= 0 && Dir < AMREX_SPACEDIM);
+    if constexpr (Dir == 0) {
+        return phi(i+offset,j,k,n);
+    } else if constexpr (Dir == 1) {
+        return phi(i,j+offset,k,n);
+    } else {
+        return phi(i,j,k+offset,n);
+    }
+}
+
+} // namespace erf_interpolation_detail
+
 /**
  * Interpolation operators used for 2nd order centered scheme
  */
@@ -81,7 +101,25 @@ struct CENTERED2
         return ( g1*a1 );
     }
 
-    int GetUpwindCellNumber () const {return 1;}
+    template<int Dir>
+    AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+    void
+    InterpolatePair (int i, int j, int k, int qty_index,
+                     amrex::Real& val_lo, amrex::Real& val_hi,
+                     amrex::Real /*upw_lo*/, amrex::Real /*upw_hi*/) const
+    {
+        amrex::Real sm1 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, -1);
+        amrex::Real s = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 0);
+        amrex::Real sp1 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 1);
+
+        val_lo = Evaluate(s,sm1);
+        val_hi = Evaluate(sp1,s);
+    }
+
+    static constexpr int GetUpwindCellNumber () noexcept {return 1;}
 
 private:
     amrex::Array4<const amrex::Real> m_phi;   // Quantity to interpolate
@@ -198,7 +236,34 @@ struct UPWIND3
         return ( g1*a1 - g2*a2 + upw * g2 * (d2 - three*d1) );
     }
 
-    int GetUpwindCellNumber () const {return 2;}
+    template<int Dir>
+    AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+    void
+    InterpolatePair (int i, int j, int k, int qty_index,
+                     amrex::Real& val_lo, amrex::Real& val_hi,
+                     amrex::Real upw_lo, amrex::Real upw_hi) const
+    {
+        amrex::Real sm2 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, -2);
+        amrex::Real sm1 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, -1);
+        amrex::Real s = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 0);
+        amrex::Real sp1 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 1);
+        amrex::Real sp2 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 2);
+
+        if (upw_lo != amrex::Real(0)) upw_lo = (upw_lo > 0) ? amrex::Real(1) : -amrex::Real(1);
+        if (upw_hi != amrex::Real(0)) upw_hi = (upw_hi > 0) ? amrex::Real(1) : -amrex::Real(1);
+        upw_lo *= m_upw_frac;
+        upw_hi *= m_upw_frac;
+
+        val_lo = Evaluate(sp1,s,sm1,sm2,upw_lo);
+        val_hi = Evaluate(sp2,sp1,s,sm1,upw_hi);
+    }
+
+    static constexpr int GetUpwindCellNumber () noexcept {return 2;}
 
     AMREX_GPU_HOST_DEVICE
     AMREX_FORCE_INLINE
@@ -415,7 +480,29 @@ struct CENTERED4
         return ( g1*a1 - g2*a2 );
     }
 
-    int GetUpwindCellNumber () const {return 2;}
+    template<int Dir>
+    AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+    void
+    InterpolatePair (int i, int j, int k, int qty_index,
+                     amrex::Real& val_lo, amrex::Real& val_hi,
+                     amrex::Real /*upw_lo*/, amrex::Real /*upw_hi*/) const
+    {
+        amrex::Real sm2 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, -2);
+        amrex::Real sm1 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, -1);
+        amrex::Real s = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 0);
+        amrex::Real sp1 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 1);
+        amrex::Real sp2 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 2);
+
+        val_lo = Evaluate(sp1,s,sm1,sm2);
+        val_hi = Evaluate(sp2,sp1,s,sm1);
+    }
+
+    static constexpr int GetUpwindCellNumber () noexcept {return 2;}
 
 private:
     amrex::Array4<const amrex::Real> m_phi;   // Quantity to interpolate
@@ -543,7 +630,38 @@ struct UPWIND5
         return ( g1*a1 - g2*a2 + g3*a3 - upw * g3 * (d3 - amrex::Real(5.0)*d2 + amrex::Real(10.0)*d1) );
     }
 
-    int GetUpwindCellNumber () const {return 3;}
+    template<int Dir>
+    AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+    void
+    InterpolatePair (int i, int j, int k, int qty_index,
+                     amrex::Real& val_lo, amrex::Real& val_hi,
+                     amrex::Real upw_lo, amrex::Real upw_hi) const
+    {
+        amrex::Real sm3 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, -3);
+        amrex::Real sm2 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, -2);
+        amrex::Real sm1 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, -1);
+        amrex::Real s = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 0);
+        amrex::Real sp1 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 1);
+        amrex::Real sp2 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 2);
+        amrex::Real sp3 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 3);
+
+        if (upw_lo != amrex::Real(0)) upw_lo = (upw_lo > 0) ? amrex::Real(1) : -amrex::Real(1);
+        if (upw_hi != amrex::Real(0)) upw_hi = (upw_hi > 0) ? amrex::Real(1) : -amrex::Real(1);
+        upw_lo *= m_upw_frac;
+        upw_hi *= m_upw_frac;
+
+        val_lo = Evaluate(sp2,sp1,s,sm1,sm2,sm3,upw_lo);
+        val_hi = Evaluate(sp3,sp2,sp1,s,sm1,sm2,upw_hi);
+    }
+
+    static constexpr int GetUpwindCellNumber () noexcept {return 3;}
 
     AMREX_GPU_HOST_DEVICE
     AMREX_FORCE_INLINE
@@ -653,7 +771,33 @@ struct CENTERED6
         return ( g1*a1 - g2*a2 + g3*a3 );
     }
 
-    int GetUpwindCellNumber () const {return 3;}
+    template<int Dir>
+    AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+    void
+    InterpolatePair (int i, int j, int k, int qty_index,
+                     amrex::Real& val_lo, amrex::Real& val_hi,
+                     amrex::Real /*upw_lo*/, amrex::Real /*upw_hi*/) const
+    {
+        amrex::Real sm3 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, -3);
+        amrex::Real sm2 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, -2);
+        amrex::Real sm1 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, -1);
+        amrex::Real s = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 0);
+        amrex::Real sp1 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 1);
+        amrex::Real sp2 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 2);
+        amrex::Real sp3 = erf_interpolation_detail::directional_value<Dir>(
+            m_phi, i, j, k, qty_index, 3);
+
+        val_lo = Evaluate(sp2,sp1,s,sm1,sm2,sm3);
+        val_hi = Evaluate(sp3,sp2,sp1,s,sm1,sm2);
+    }
+
+    static constexpr int GetUpwindCellNumber () noexcept {return 3;}
 
 private:
     amrex::Array4<const amrex::Real> m_phi;   // Quantity to interpolate
