@@ -81,7 +81,7 @@ struct CENTERED2
         return ( g1*a1 );
     }
 
-    static constexpr int GetUpwindCellNumber () noexcept {return 1;}
+    int GetUpwindCellNumber () const {return 1;}
 
 private:
     amrex::Array4<const amrex::Real> m_phi;   // Quantity to interpolate
@@ -198,7 +198,7 @@ struct UPWIND3
         return ( g1*a1 - g2*a2 + upw * g2 * (d2 - three*d1) );
     }
 
-    static constexpr int GetUpwindCellNumber () noexcept {return 2;}
+    int GetUpwindCellNumber () const {return 2;}
 
     AMREX_GPU_HOST_DEVICE
     AMREX_FORCE_INLINE
@@ -318,7 +318,7 @@ struct UPWIND3SL
         return (sm1 + myhalf * phi * (sm1 - sm2));
     }
 
-    static constexpr int GetUpwindCellNumber () noexcept {return 2;}
+    int GetUpwindCellNumber () const {return 2;}
 
 private:
     amrex::Array4<const amrex::Real> m_phi;   // Quantity to interpolate
@@ -415,7 +415,7 @@ struct CENTERED4
         return ( g1*a1 - g2*a2 );
     }
 
-    static constexpr int GetUpwindCellNumber () noexcept {return 2;}
+    int GetUpwindCellNumber () const {return 2;}
 
 private:
     amrex::Array4<const amrex::Real> m_phi;   // Quantity to interpolate
@@ -543,7 +543,7 @@ struct UPWIND5
         return ( g1*a1 - g2*a2 + g3*a3 - upw * g3 * (d3 - amrex::Real(5.0)*d2 + amrex::Real(10.0)*d1) );
     }
 
-    static constexpr int GetUpwindCellNumber () noexcept {return 3;}
+    int GetUpwindCellNumber () const {return 3;}
 
     AMREX_GPU_HOST_DEVICE
     AMREX_FORCE_INLINE
@@ -653,7 +653,7 @@ struct CENTERED6
         return ( g1*a1 - g2*a2 + g3*a3 );
     }
 
-    static constexpr int GetUpwindCellNumber () noexcept {return 3;}
+    int GetUpwindCellNumber () const {return 3;}
 
 private:
     amrex::Array4<const amrex::Real> m_phi;   // Quantity to interpolate
