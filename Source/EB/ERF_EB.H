@@ -11,10 +11,13 @@
 
 #include <AMReX_EB2.H>
 #include <AMReX_EBFabFactory.H>
+#include <AMReX_BaseFab.H>
 #include <AMReX_Dim3.H>
 #include <AMReX_GpuContainers.H>
 
 #include <ERF_EBAux.H>
+
+#include <cstdint>
 
 /**
  * \brief Owns and exposes cell-centered and face-centered EB factories.
@@ -28,6 +31,8 @@ class eb_ {
   public:
 
     using CutCellList = amrex::Gpu::DeviceVector<amrex::Dim3>;
+    using UpwindAvailability =
+        amrex::FabArray<amrex::BaseFab<std::uint8_t>>;
 
     //! Destroy the EB factory manager.
     ~eb_ ();
@@ -99,7 +104,7 @@ class eb_ {
      * \def USE_FC_FACTORY
      * \brief Select native AMReX face-centered factories instead of ERF auxiliary factories.
      */
-    #define USE_FC_FACTORY 0 // Default to 0: use eb_aux_ (original)
+    #define USE_FC_FACTORY 1 // Default to 0: use eb_aux_ (original)
     #endif
 
     //! Return cut x-faces owned by a grid, cached when the EB factories are built.
@@ -118,6 +123,27 @@ class eb_ {
     [[nodiscard]] CutCellList const& get_w_cut_cells (int grid_index) const noexcept
     {
         return m_w_cut_cells[grid_index];
+    }
+
+    //! Return packed signed stencil availability on the x-momentum grid.
+    [[nodiscard]] UpwindAvailability const&
+    get_u_upwind_availability () const noexcept
+    {
+        return m_u_upwind_availability;
+    }
+
+    //! Return packed signed stencil availability on the y-momentum grid.
+    [[nodiscard]] UpwindAvailability const&
+    get_v_upwind_availability () const noexcept
+    {
+        return m_v_upwind_availability;
+    }
+
+    //! Return packed signed stencil availability on the z-momentum grid.
+    [[nodiscard]] UpwindAvailability const&
+    get_w_upwind_availability () const noexcept
+    {
+        return m_w_upwind_availability;
     }
 
     //! Return the cell-centered EB factory.
@@ -189,9 +215,19 @@ class eb_ {
     amrex::Vector<CutCellList> m_v_cut_cells;
     amrex::Vector<CutCellList> m_w_cut_cells;
 
+    // One component per flux direction. Each byte packs positive- and
+    // negative-flow availability in bits [1:0] and [3:2], respectively.
+    UpwindAvailability m_u_upwind_availability;
+    UpwindAvailability m_v_upwind_availability;
+    UpwindAvailability m_w_upwind_availability;
+
     void build_cut_cell_lists (
         amrex::FabArray<amrex::EBCellFlagFab> const& flags,
         amrex::Vector<CutCellList>& cut_cells);
+
+    void build_upwind_availability (
+        amrex::FabArray<amrex::EBCellFlagFab> const& flags,
+        UpwindAvailability& availability);
 
     /**
      * \brief Build terrain EB geometry for the supplied Geometry.
