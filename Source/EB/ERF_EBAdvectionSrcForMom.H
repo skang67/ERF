@@ -28,6 +28,58 @@ momentum_stencil_is_regular (const amrex::EBCellFlagFab& flag_fab,
            flag_fab.getType(stencil_box) == amrex::FabType::regular;
 }
 
+/**
+ * \brief Count consecutive noncovered upwind cells for one flux direction.
+ *
+ * Positive flow starts one cell below the flux index and steps backward;
+ * negative flow starts at the flux index and steps forward.  Zero and
+ * unordered flow retain zero availability.
+ */
+template<int Dir, int StencilSize>
+AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+int
+upwind_cell_availability (int i, int j, int k,
+                          amrex::Real mass_flux,
+                          const amrex::Array4<const amrex::EBCellFlag>& flag) noexcept
+{
+    static_assert(Dir >= 0 && Dir < AMREX_SPACEDIM);
+    static_assert(StencilSize > 0);
+
+    bool const positive = mass_flux > zero;
+    if (!positive && !(mass_flux < zero)) {
+        return 0;
+    }
+
+    int index;
+    if constexpr (Dir == 0) {
+        index = i;
+    } else if constexpr (Dir == 1) {
+        index = j;
+    } else {
+        index = k;
+    }
+    index -= static_cast<int>(positive);
+
+    int const step = positive ? -1 : 1;
+    int available = 0;
+    for (int n = 0; n < StencilSize; ++n) {
+        bool covered;
+        if constexpr (Dir == 0) {
+            covered = flag(index,j,k).isCovered();
+        } else if constexpr (Dir == 1) {
+            covered = flag(i,index,k).isCovered();
+        } else {
+            covered = flag(i,j,index).isCovered();
+        }
+        if (covered) {
+            break;
+        }
+        ++available;
+        index += step;
+    }
+    return available;
+}
+
 } // namespace erf_advection_detail
 
 /**
@@ -87,15 +139,8 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
     InterpType_H interp_w_horz(w, upw_frac_h); InterpType_V interp_w_vert(w, upw_frac_v); // Z-MOM
     // WallInterpType interp_w_wall(w, upw_frac_v); // Z-MOM @ wall
 
-    const int ncells_u_horz = interp_u_horz.GetUpwindCellNumber();
-    const int ncells_u_vert = interp_u_vert.GetUpwindCellNumber();
-    const int ncells_v_horz = interp_v_horz.GetUpwindCellNumber();
-    const int ncells_v_vert = interp_v_vert.GetUpwindCellNumber();
-    const int ncells_w_horz = interp_w_horz.GetUpwindCellNumber();
-    const int ncells_w_vert = interp_w_vert.GetUpwindCellNumber();
-
-    const int horizontal_stencil_size = interp_u_horz.GetUpwindCellNumber();
-    const int vertical_stencil_size = interp_u_vert.GetUpwindCellNumber();
+    static constexpr int horizontal_stencil_size = InterpType_H::GetUpwindCellNumber();
+    static constexpr int vertical_stencil_size = InterpType_V::GetUpwindCellNumber();
 
     amrex::GpuArray<bool, AMREX_SPACEDIM> u_stencil_is_regular{false, false, false};
     amrex::GpuArray<bool, AMREX_SPACEDIM> v_stencil_is_regular{false, false, false};
@@ -220,32 +265,19 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
             if (u_x_stencil_is_regular)
             {
                 if (rho_u_avg > zero || rho_u_avg < zero) {
-                    icell = ncells_u_horz;
+                    icell = horizontal_stencil_size;
                 }
             }
-            else if (rho_u_avg>zero)
+            else
             {
-                for (int ii=0; ii<ncells_u_horz; ++ii) {
-                    if (u_cflag(i-ii-1,j,k).isCovered()) {
-                        break;
-                    }
-                    icell++;
-                }
-            }
-            else if (rho_u_avg<zero)
-            {
-                for (int ii=0; ii<ncells_u_horz; ++ii) {
-                    if (u_cflag(i+ii,j,k).isCovered()) {
-                        break;
-                    }
-                    icell++;
-                }
+                icell = erf_advection_detail::upwind_cell_availability<0,horizontal_stencil_size>(
+                    i, j, k, rho_u_avg, u_cflag);
             }
 
             // Interpolate u using the highest-order scheme
 
             amrex::Real interpx = zero;
-            if (icell==ncells_u_horz) {
+            if (icell==horizontal_stencil_size) {
                 interp_u_horz.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
             } else {
                 if (icell<=1) {
@@ -275,32 +307,19 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
             if (u_y_stencil_is_regular)
             {
                 if (rho_v_avg > zero || rho_v_avg < zero) {
-                    jcell = ncells_u_horz;
+                    jcell = horizontal_stencil_size;
                 }
             }
-            else if (rho_v_avg>zero)
+            else
             {
-                for (int jj=0; jj<ncells_u_horz; ++jj) {
-                    if (u_cflag(i,j-jj-1,k).isCovered()) {
-                        break;
-                    }
-                    jcell++;
-                }
-            }
-            else if (rho_v_avg<zero)
-            {
-                for (int jj=0; jj<ncells_u_horz; ++jj) {
-                    if (u_cflag(i,j+jj,k).isCovered()) {
-                        break;
-                    }
-                    jcell++;
-                }
+                jcell = erf_advection_detail::upwind_cell_availability<1,horizontal_stencil_size>(
+                    i, j, k, rho_v_avg, u_cflag);
             }
 
             // Interpolate u using the highest-order scheme
 
             amrex::Real interpy = zero;
-            if (jcell==ncells_u_horz) {
+            if (jcell==horizontal_stencil_size) {
                 interp_u_horz.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
             } else {
                 if (jcell<=1) {
@@ -330,32 +349,19 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
             if (u_z_stencil_is_regular)
             {
                 if (rho_w_avg > zero || rho_w_avg < zero) {
-                    kcell = ncells_u_vert;
+                    kcell = vertical_stencil_size;
                 }
             }
-            else if (rho_w_avg>zero)
+            else
             {
-                for (int kk=0; kk<ncells_u_vert; ++kk) {
-                    if (u_cflag(i,j,k-kk-1).isCovered()) {
-                        break;
-                    }
-                    kcell++;
-                }
-            }
-            else if (rho_w_avg<zero)
-            {
-                for (int kk=0; kk<ncells_u_vert; ++kk) {
-                    if (u_cflag(i,j,k+kk).isCovered()) {
-                        break;
-                    }
-                    kcell++;
-                }
+                kcell = erf_advection_detail::upwind_cell_availability<2,vertical_stencil_size>(
+                    i, j, k, rho_w_avg, u_cflag);
             }
 
             // Interpolate u using the highest-order scheme
 
             amrex::Real interpz = zero;
-            if (kcell==ncells_u_vert) {
+            if (kcell==vertical_stencil_size) {
                 interp_u_vert.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
             } else {
                 if (kcell<=1) {
@@ -428,32 +434,19 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
             if (v_x_stencil_is_regular)
             {
                 if (rho_u_avg > zero || rho_u_avg < zero) {
-                    icell = ncells_v_horz;
+                    icell = horizontal_stencil_size;
                 }
             }
-            else if (rho_u_avg>zero)
+            else
             {
-                for (int ii=0; ii<ncells_v_horz; ++ii) {
-                    if (v_cflag(i-ii-1,j,k).isCovered()) {
-                        break;
-                    }
-                    icell++;
-                }
-            }
-            else if (rho_u_avg<zero)
-            {
-                for (int ii=0; ii<ncells_v_horz; ++ii) {
-                    if (v_cflag(i+ii,j,k).isCovered()) {
-                        break;
-                    }
-                    icell++;
-                }
+                icell = erf_advection_detail::upwind_cell_availability<0,horizontal_stencil_size>(
+                    i, j, k, rho_u_avg, v_cflag);
             }
 
             // Interpolate v using the highest-order scheme
 
             amrex::Real interpx = zero;
-            if (icell==ncells_v_horz) {
+            if (icell==horizontal_stencil_size) {
                 interp_v_horz.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
             } else {
                 if (icell<=1) {
@@ -483,32 +476,19 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
             if (v_y_stencil_is_regular)
             {
                 if (rho_v_avg > zero || rho_v_avg < zero) {
-                    jcell = ncells_v_horz;
+                    jcell = horizontal_stencil_size;
                 }
             }
-            else if (rho_v_avg>zero)
+            else
             {
-                for (int jj=0; jj<ncells_v_horz; ++jj) {
-                    if (v_cflag(i,j-jj-1,k).isCovered()) {
-                        break;
-                    }
-                    jcell++;
-                }
-            }
-            else if (rho_v_avg<zero)
-            {
-                for (int jj=0; jj<ncells_v_horz; ++jj) {
-                    if (v_cflag(i,j+jj,k).isCovered()) {
-                        break;
-                    }
-                    jcell++;
-                }
+                jcell = erf_advection_detail::upwind_cell_availability<1,horizontal_stencil_size>(
+                    i, j, k, rho_v_avg, v_cflag);
             }
 
             // Interpolate v using the highest-order scheme
 
             amrex::Real interpy = zero;
-            if (jcell==ncells_v_horz) {
+            if (jcell==horizontal_stencil_size) {
                 interp_v_horz.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
             } else {
                 if (jcell<=1) {
@@ -538,32 +518,19 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
             if (v_z_stencil_is_regular)
             {
                 if (rho_w_avg > zero || rho_w_avg < zero) {
-                    kcell = ncells_v_vert;
+                    kcell = vertical_stencil_size;
                 }
             }
-            else if (rho_w_avg>zero)
+            else
             {
-                for (int kk=0; kk<ncells_v_vert; ++kk) {
-                    if (v_cflag(i,j,k-kk-1).isCovered()) {
-                        break;
-                    }
-                    kcell++;
-                }
-            }
-            else if (rho_w_avg<zero)
-            {
-                for (int kk=0; kk<ncells_v_vert; ++kk) {
-                    if (v_cflag(i,j,k+kk).isCovered()) {
-                        break;
-                    }
-                    kcell++;
-                }
+                kcell = erf_advection_detail::upwind_cell_availability<2,vertical_stencil_size>(
+                    i, j, k, rho_w_avg, v_cflag);
             }
 
             // Interpolate v using the highest-order scheme
 
             amrex::Real interpz = zero;
-            if (kcell==ncells_v_vert) {
+            if (kcell==vertical_stencil_size) {
                 interp_v_vert.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
             } else {
                 if (kcell<=1) {
@@ -617,7 +584,7 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                 amrex::Real rho_w_avg = myhalf * (rho_w(i,j,k) + rho_w(i,j,k-1));
                 int kcell = 0;
                 if (rho_w_avg > zero || rho_w_avg < zero) {
-                    kcell = ncells_w_vert;
+                    kcell = vertical_stencil_size;
                 }
 
                 if (k == hi_z_face || k == lo_z_face+1) {
@@ -627,7 +594,7 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                 }
 
                 amrex::Real interpz = zero;
-                if (kcell==ncells_w_vert) {
+                if (kcell==vertical_stencil_size) {
                     interp_w_vert.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
                 } else {
                     if (kcell<=1) {
@@ -655,32 +622,19 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
             if (w_x_stencil_is_regular)
             {
                 if (rho_u_avg > zero || rho_u_avg < zero) {
-                    icell = ncells_w_horz;
+                    icell = horizontal_stencil_size;
                 }
             }
-            else if (rho_u_avg>zero)
+            else
             {
-                for (int ii=0; ii<ncells_w_horz; ++ii) {
-                    if (w_cflag(i-ii-1,j,k).isCovered()) {
-                        break;
-                    }
-                    icell++;
-                }
-            }
-            else if (rho_u_avg<zero)
-            {
-                for (int ii=0; ii<ncells_w_horz; ++ii) {
-                    if (w_cflag(i+ii,j,k).isCovered()) {
-                        break;
-                    }
-                    icell++;
-                }
+                icell = erf_advection_detail::upwind_cell_availability<0,horizontal_stencil_size>(
+                    i, j, k, rho_u_avg, w_cflag);
             }
 
             // Interpolate w using the highest-order scheme
 
             amrex::Real interpx = zero;
-            if (icell==ncells_w_horz) {
+            if (icell==horizontal_stencil_size) {
                 interp_w_horz.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
             } else {
                 if (icell<=1) {
@@ -710,32 +664,19 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
             if (w_y_stencil_is_regular)
             {
                 if (rho_v_avg > zero || rho_v_avg < zero) {
-                    jcell = ncells_w_horz;
+                    jcell = horizontal_stencil_size;
                 }
             }
-            else if (rho_v_avg>zero)
+            else
             {
-                for (int jj=0; jj<ncells_w_horz; ++jj) {
-                    if (w_cflag(i,j-jj-1,k).isCovered()) {
-                        break;
-                    }
-                    jcell++;
-                }
-            }
-            else if (rho_v_avg<zero)
-            {
-                for (int jj=0; jj<ncells_w_horz; ++jj) {
-                    if (w_cflag(i,j+jj,k).isCovered()) {
-                        break;
-                    }
-                    jcell++;
-                }
+                jcell = erf_advection_detail::upwind_cell_availability<1,horizontal_stencil_size>(
+                    i, j, k, rho_v_avg, w_cflag);
             }
 
             // Interpolate w using the highest-order scheme
 
             amrex::Real interpy = zero;
-            if (jcell==ncells_w_horz) {
+            if (jcell==horizontal_stencil_size) {
                 interp_w_horz.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
             } else {
                 if (jcell<=1) {
@@ -770,26 +711,13 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                 if (w_z_stencil_is_regular)
                 {
                     if (rho_w_avg > zero || rho_w_avg < zero) {
-                        kcell = ncells_w_vert;
+                        kcell = vertical_stencil_size;
                     }
                 }
-                else if (rho_w_avg>zero)
+                else
                 {
-                    for (int kk=0; kk<ncells_w_vert; ++kk) {
-                        if (w_cflag(i,j,k-kk-1).isCovered()) {
-                            break;
-                        }
-                        kcell++;
-                    }
-                }
-                else if (rho_w_avg<zero)
-                {
-                    for (int kk=0; kk<ncells_w_vert; ++kk) {
-                        if (w_cflag(i,j,k+kk).isCovered()) {
-                            break;
-                        }
-                        kcell++;
-                    }
+                    kcell = erf_advection_detail::upwind_cell_availability<2,vertical_stencil_size>(
+                        i, j, k, rho_w_avg, w_cflag);
                 }
 
                 // Adjust available cell numbers near the top and bottom boundaries
@@ -803,7 +731,7 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                 // Interpolate w using the highest-order scheme
 
                 amrex::Real interpz = zero;
-                if (kcell==ncells_w_vert) {
+                if (kcell==vertical_stencil_size) {
                     interp_w_vert.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
                 } else {
                     if (kcell<=1) {
