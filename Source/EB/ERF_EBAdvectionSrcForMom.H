@@ -153,11 +153,59 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
     const bool w_y_stencil_is_regular = w_stencil_is_regular[1];
     const bool w_z_stencil_is_regular = w_stencil_is_regular[2];
 
+    const bool u_has_regular_stencils = u_x_stencil_is_regular &&
+                                        u_y_stencil_is_regular &&
+                                        u_z_stencil_is_regular;
+    const bool v_has_regular_stencils = v_x_stencil_is_regular &&
+                                        v_y_stencil_is_regular &&
+                                        v_z_stencil_is_regular;
+    const bool w_has_regular_stencils = w_x_stencil_is_regular &&
+                                        w_y_stencil_is_regular &&
+                                        w_z_stencil_is_regular;
+
     // ---------------------------------------------------- //
     // x-momentum
     // ---------------------------------------------------- //
 
-    amrex::ParallelFor(bxx_grown[0], bxx_grown[1], bxx_grown[2],
+    // Use a distinct kernel type so proven-regular launches do not capture or
+    // compile EB area fractions, flag scans, or unreachable order fallbacks.
+    if (u_has_regular_stencils) {
+        amrex::ParallelFor(bxx_grown[0], bxx_grown[1], bxx_grown[2],
+        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            amrex::Real rho_u_avg = myhalf * (rho_u(i-1,j,k) * mf_ux_inv(i-1,j,0) + rho_u(i,j,k) * mf_ux_inv(i,j,0));
+            amrex::Real interpx = zero;
+            if (rho_u_avg > zero || rho_u_avg < zero) {
+                interp_u_horz.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
+            } else {
+                interp_u_CEN2.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
+            }
+            flx_u_arr[0](i,j,k) = rho_u_avg * interpx;
+        },
+        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            amrex::Real rho_v_avg = myhalf * (rho_v(i,j,k) * mf_vx_inv(i,j,0) + rho_v(i-1,j,k) * mf_vx_inv(i-1,j,0));
+            amrex::Real interpy = zero;
+            if (rho_v_avg > zero || rho_v_avg < zero) {
+                interp_u_horz.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
+            } else {
+                interp_u_CEN2.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
+            }
+            flx_u_arr[1](i,j,k) = rho_v_avg * interpy;
+        },
+        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            amrex::Real rho_w_avg = myhalf * (rho_w(i,j,k) + rho_w(i-1,j,k));
+            amrex::Real interpz = zero;
+            if (rho_w_avg > zero || rho_w_avg < zero) {
+                interp_u_vert.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
+            } else {
+                interp_u_CEN2.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
+            }
+            flx_u_arr[2](i,j,k) = rho_w_avg * interpz;
+        });
+    } else {
+        amrex::ParallelFor(bxx_grown[0], bxx_grown[1], bxx_grown[2],
     // x-momentum: x-face
     [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
     {
@@ -322,13 +370,50 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
 
             flx_u_arr[2](i,j,k) = zero;
         }
-    });
+        });
+    }
 
     // ---------------------------------------------------- //
     // y-momentum
     // ---------------------------------------------------- //
 
-    amrex::ParallelFor(bxy_grown[0], bxy_grown[1], bxy_grown[2],
+    if (v_has_regular_stencils) {
+        amrex::ParallelFor(bxy_grown[0], bxy_grown[1], bxy_grown[2],
+        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            amrex::Real rho_u_avg = myhalf * (rho_u(i,j,k) * mf_uy_inv(i,j,0) + rho_u(i,j-1,k) * mf_uy_inv(i,j-1,0));
+            amrex::Real interpx = zero;
+            if (rho_u_avg > zero || rho_u_avg < zero) {
+                interp_v_horz.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
+            } else {
+                interp_v_CEN2.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
+            }
+            flx_v_arr[0](i,j,k) = rho_u_avg * interpx;
+        },
+        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            amrex::Real rho_v_avg = myhalf * (rho_v(i,j,k) * mf_vy_inv(i,j,0) + rho_v(i,j-1,k) * mf_vy_inv(i,j-1,0));
+            amrex::Real interpy = zero;
+            if (rho_v_avg > zero || rho_v_avg < zero) {
+                interp_v_horz.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
+            } else {
+                interp_v_CEN2.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
+            }
+            flx_v_arr[1](i,j,k) = rho_v_avg * interpy;
+        },
+        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            amrex::Real rho_w_avg = myhalf * (rho_w(i,j,k) + rho_w(i,j-1,k));
+            amrex::Real interpz = zero;
+            if (rho_w_avg > zero || rho_w_avg < zero) {
+                interp_v_vert.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
+            } else {
+                interp_v_CEN2.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
+            }
+            flx_v_arr[2](i,j,k) = rho_w_avg * interpz;
+        });
+    } else {
+        amrex::ParallelFor(bxy_grown[0], bxy_grown[1], bxy_grown[2],
     // y-momentum: x-face
     [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
     {
@@ -493,13 +578,69 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
 
             flx_v_arr[2](i,j,k) = zero;
         }
-    });
+        });
+    }
 
     // ---------------------------------------------------- //
     // z-momentum
     // ---------------------------------------------------- //
 
-    amrex::ParallelFor(bxz_grown[0], bxz_grown[1], bxz_grown[2],
+    if (w_has_regular_stencils) {
+        amrex::ParallelFor(bxz_grown[0], bxz_grown[1], bxz_grown[2],
+        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            amrex::Real rho_u_avg = myhalf * (rho_u(i,j,k) + rho_u(i,j,k-1)) * mf_ux_inv(i,j,0);
+            amrex::Real interpx = zero;
+            if (rho_u_avg > zero || rho_u_avg < zero) {
+                interp_w_horz.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
+            } else {
+                interp_w_CEN2.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
+            }
+            flx_w_arr[0](i,j,k) = rho_u_avg * interpx;
+        },
+        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            amrex::Real rho_v_avg = myhalf * (rho_v(i,j,k) + rho_v(i,j,k-1)) * mf_vy_inv(i,j,0);
+            amrex::Real interpy = zero;
+            if (rho_v_avg > zero || rho_v_avg < zero) {
+                interp_w_horz.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
+            } else {
+                interp_w_CEN2.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
+            }
+            flx_w_arr[1](i,j,k) = rho_v_avg * interpy;
+        },
+        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            if (k==lo_z_face || k==hi_z_face+1) {
+                flx_w_arr[2](i,j,k) = rho_w(i,j,k) * w(i,j,k);
+            } else {
+                amrex::Real rho_w_avg = myhalf * (rho_w(i,j,k) + rho_w(i,j,k-1));
+                int kcell = 0;
+                if (rho_w_avg > zero || rho_w_avg < zero) {
+                    kcell = ncells_w_vert;
+                }
+
+                if (k == hi_z_face || k == lo_z_face+1) {
+                    kcell=std::min(kcell,1);
+                } else if (k == hi_z_face-1 || k == lo_z_face+2 ) {
+                    kcell=std::min(kcell,2);
+                }
+
+                amrex::Real interpz = zero;
+                if (kcell==ncells_w_vert) {
+                    interp_w_vert.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
+                } else {
+                    if (kcell<=1) {
+                        interp_w_CEN2.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
+                    } else if (kcell==2) {
+                        interp_w_UPW3.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
+                    }
+                }
+                flx_w_arr[2](i,j,k) = rho_w_avg * interpz;
+            }
+        });
+    } else {
+        amrex::ParallelFor(bxz_grown[0], bxz_grown[1], bxz_grown[2],
     // z-momentum: x-face
     [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
     {
@@ -678,7 +819,8 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
 
             flx_w_arr[2](i,j,k) = zero;
         }
-    });
+        });
+    }
 
 }
 
