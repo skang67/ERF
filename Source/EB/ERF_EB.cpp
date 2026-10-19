@@ -27,6 +27,60 @@ namespace {
 
 constexpr int max_upwind_availability = 3;
 
+void
+build_upwind_availability (
+    FabArray<EBCellFlagFab> const& flags,
+    eb_::UpwindAvailability& availability)
+{
+    BL_PROFILE("build_upwind_availability()");
+
+    constexpr int ncomp = AMREX_SPACEDIM;
+    constexpr int ngrow = 1;
+
+    AMREX_ALWAYS_ASSERT(flags.nGrow() >= ngrow + max_upwind_availability);
+
+    availability.clear();
+    availability.define(flags.boxArray(), flags.DistributionMap(), ncomp, ngrow);
+
+    for (MFIter mfi(availability, false); mfi.isValid(); ++mfi) {
+        Box const bx = amrex::grow(mfi.validbox(), ngrow);
+        Array4<EBCellFlag const> const& flag = flags.const_array(mfi);
+        Array4<std::uint8_t> const& packed = availability.array(mfi);
+
+        ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+                int positive_count = 0;
+                int negative_count = 0;
+
+                for (int offset = 0; offset < max_upwind_availability; ++offset) {
+                    int const stride = offset + 1;
+                    int const ii = i - ((dir == 0) ? stride : 0);
+                    int const jj = j - ((dir == 1) ? stride : 0);
+                    int const kk = k - ((dir == 2) ? stride : 0);
+                    if (flag(ii,jj,kk).isCovered()) {
+                        break;
+                    }
+                    ++positive_count;
+                }
+
+                for (int offset = 0; offset < max_upwind_availability; ++offset) {
+                    int const ii = i + ((dir == 0) ? offset : 0);
+                    int const jj = j + ((dir == 1) ? offset : 0);
+                    int const kk = k + ((dir == 2) ? offset : 0);
+                    if (flag(ii,jj,kk).isCovered()) {
+                        break;
+                    }
+                    ++negative_count;
+                }
+
+                packed(i,j,k,dir) = static_cast<std::uint8_t>(
+                    positive_count | (negative_count << 2));
+            }
+        });
+    }
+}
+
 #ifdef AMREX_USE_GPU
 int
 fill_cut_cell_list (Box const& bx, Array4<EBCellFlag const> const& flag,
@@ -207,60 +261,6 @@ eb_::build_cut_cell_lists (FabArray<EBCellFlagFab> const& flags,
 #else
     amrex::ignore_unused(flags);
 #endif
-}
-
-void
-eb_::build_upwind_availability (
-    FabArray<EBCellFlagFab> const& flags,
-    UpwindAvailability& availability)
-{
-    BL_PROFILE("eb_::build_upwind_availability()");
-
-    constexpr int ncomp = AMREX_SPACEDIM;
-    constexpr int ngrow = 1;
-
-    AMREX_ALWAYS_ASSERT(flags.nGrow() >= ngrow + max_upwind_availability);
-
-    availability.clear();
-    availability.define(flags.boxArray(), flags.DistributionMap(), ncomp, ngrow);
-
-    for (MFIter mfi(availability, false); mfi.isValid(); ++mfi) {
-        Box const bx = amrex::grow(mfi.validbox(), ngrow);
-        Array4<EBCellFlag const> const& flag = flags.const_array(mfi);
-        Array4<std::uint8_t> const& packed = availability.array(mfi);
-
-        ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
-        {
-            for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
-                int positive_count = 0;
-                int negative_count = 0;
-
-                for (int offset = 0; offset < max_upwind_availability; ++offset) {
-                    int const stride = offset + 1;
-                    int const ii = i - ((dir == 0) ? stride : 0);
-                    int const jj = j - ((dir == 1) ? stride : 0);
-                    int const kk = k - ((dir == 2) ? stride : 0);
-                    if (flag(ii,jj,kk).isCovered()) {
-                        break;
-                    }
-                    ++positive_count;
-                }
-
-                for (int offset = 0; offset < max_upwind_availability; ++offset) {
-                    int const ii = i + ((dir == 0) ? offset : 0);
-                    int const jj = j + ((dir == 1) ? offset : 0);
-                    int const kk = k + ((dir == 2) ? offset : 0);
-                    if (flag(ii,jj,kk).isCovered()) {
-                        break;
-                    }
-                    ++negative_count;
-                }
-
-                packed(i,j,k,dir) = static_cast<std::uint8_t>(
-                    positive_count | (negative_count << 2));
-            }
-        });
-    }
 }
 
 /**

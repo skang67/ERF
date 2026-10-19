@@ -104,7 +104,7 @@ class eb_ {
      * \def USE_FC_FACTORY
      * \brief Select native AMReX face-centered factories instead of ERF auxiliary factories.
      */
-    #define USE_FC_FACTORY 0 // Default to 0: use eb_aux_ (original)
+    #define USE_FC_FACTORY 1 // Default to 0: use eb_aux_ (original)
     #endif
 
     //! Return cut x-faces owned by a grid, cached when the EB factories are built.
@@ -224,10 +224,6 @@ class eb_ {
     void build_cut_cell_lists (
         amrex::FabArray<amrex::EBCellFlagFab> const& flags,
         amrex::Vector<CutCellList>& cut_cells);
-
-    void build_upwind_availability (
-        amrex::FabArray<amrex::EBCellFlagFab> const& flags,
-        UpwindAvailability& availability);
 
     /**
      * \brief Build terrain EB geometry for the supplied Geometry.
