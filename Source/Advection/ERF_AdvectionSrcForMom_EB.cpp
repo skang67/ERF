@@ -26,81 +26,96 @@ cut_cell_advection_rhs (
     const Array4<Real>& flux_z,
     Real dxInv, Real dyInv, Real dzInv, Real mfsq) noexcept
 {
-    Real fxm = flux_x(i,j,k);
-    if (afrac_x(i,j,k) != zero && afrac_x(i,j,k) != one) {
-        int jj = j + static_cast<int>(std::copysign(one, fcx(i,j,k,0)));
-        int kk = k + static_cast<int>(std::copysign(one, fcx(i,j,k,1)));
-        Real fracy = (mask(i-1,jj,k) || mask(i,jj,k)) ? std::abs(fcx(i,j,k,0)) : zero;
-        Real fracz = (mask(i-1,j,kk) || mask(i,j,kk)) ? std::abs(fcx(i,j,k,1)) : zero;
-        fxm = (one-fracy)*(one-fracz)*fxm
-            +      fracy *(one-fracz)*flux_x(i,jj,k )
-            +      fracz *(one-fracy)*flux_x(i,j ,kk)
-            +      fracy *     fracz *flux_x(i,jj,kk);
+    // Accumulate one direction at a time so only two interpolated face fluxes are live.
+    Real divergence;
+
+    {
+        Real fxm = flux_x(i,j,k);
+        if (afrac_x(i,j,k) != zero && afrac_x(i,j,k) != one) {
+            int jj = j + static_cast<int>(std::copysign(one, fcx(i,j,k,0)));
+            int kk = k + static_cast<int>(std::copysign(one, fcx(i,j,k,1)));
+            Real fracy = (mask(i-1,jj,k) || mask(i,jj,k)) ? std::abs(fcx(i,j,k,0)) : zero;
+            Real fracz = (mask(i-1,j,kk) || mask(i,j,kk)) ? std::abs(fcx(i,j,k,1)) : zero;
+            fxm = (one-fracy)*(one-fracz)*fxm
+                +      fracy *(one-fracz)*flux_x(i,jj,k )
+                +      fracz *(one-fracy)*flux_x(i,j ,kk)
+                +      fracy *     fracz *flux_x(i,jj,kk);
+        }
+
+        Real fxp = flux_x(i+1,j,k);
+        if (afrac_x(i+1,j,k) != zero && afrac_x(i+1,j,k) != one) {
+            int jj = j + static_cast<int>(std::copysign(one,fcx(i+1,j,k,0)));
+            int kk = k + static_cast<int>(std::copysign(one,fcx(i+1,j,k,1)));
+            Real fracy = (mask(i,jj,k) || mask(i+1,jj,k)) ? std::abs(fcx(i+1,j,k,0)) : zero;
+            Real fracz = (mask(i,j,kk) || mask(i+1,j,kk)) ? std::abs(fcx(i+1,j,k,1)) : zero;
+            fxp = (one-fracy)*(one-fracz)*fxp
+                +      fracy *(one-fracz)*flux_x(i+1,jj,k )
+                +      fracz *(one-fracy)*flux_x(i+1,j ,kk)
+                +      fracy *     fracz *flux_x(i+1,jj,kk);
+        }
+
+        divergence = (afrac_x(i+1,j,k) * fxp - afrac_x(i,j,k) * fxm) * dxInv * mfsq;
     }
 
-    Real fxp = flux_x(i+1,j,k);
-    if (afrac_x(i+1,j,k) != zero && afrac_x(i+1,j,k) != one) {
-        int jj = j + static_cast<int>(std::copysign(one,fcx(i+1,j,k,0)));
-        int kk = k + static_cast<int>(std::copysign(one,fcx(i+1,j,k,1)));
-        Real fracy = (mask(i,jj,k) || mask(i+1,jj,k)) ? std::abs(fcx(i+1,j,k,0)) : zero;
-        Real fracz = (mask(i,j,kk) || mask(i+1,j,kk)) ? std::abs(fcx(i+1,j,k,1)) : zero;
-        fxp = (one-fracy)*(one-fracz)*fxp
-            +      fracy *(one-fracz)*flux_x(i+1,jj,k )
-            +      fracz *(one-fracy)*flux_x(i+1,j ,kk)
-            +      fracy *     fracz *flux_x(i+1,jj,kk);
+    {
+        Real fym = flux_y(i,j,k);
+        if (afrac_y(i,j,k) != zero && afrac_y(i,j,k) != one) {
+            int ii = i + static_cast<int>(std::copysign(one,fcy(i,j,k,0)));
+            int kk = k + static_cast<int>(std::copysign(one,fcy(i,j,k,1)));
+            Real fracx = (mask(ii,j-1,k) || mask(ii,j,k)) ? std::abs(fcy(i,j,k,0)) : zero;
+            Real fracz = (mask(i,j-1,kk) || mask(i,j,kk)) ? std::abs(fcy(i,j,k,1)) : zero;
+            fym = (one-fracx)*(one-fracz)*fym
+                +      fracx *(one-fracz)*flux_y(ii,j,k )
+                +      fracz *(one-fracx)*flux_y(i ,j,kk)
+                +      fracx *     fracz *flux_y(ii,j,kk);
+        }
+
+        Real fyp = flux_y(i,j+1,k);
+        if (afrac_y(i,j+1,k) != zero && afrac_y(i,j+1,k) != one) {
+            int ii = i + static_cast<int>(std::copysign(one,fcy(i,j+1,k,0)));
+            int kk = k + static_cast<int>(std::copysign(one,fcy(i,j+1,k,1)));
+            Real fracx = (mask(ii,j,k) || mask(ii,j+1,k)) ? std::abs(fcy(i,j+1,k,0)) : zero;
+            Real fracz = (mask(i,j,kk) || mask(i,j+1,kk)) ? std::abs(fcy(i,j+1,k,1)) : zero;
+            fyp = (one-fracx)*(one-fracz)*fyp
+                +      fracx *(one-fracz)*flux_y(ii,j+1,k )
+                +      fracz *(one-fracx)*flux_y(i ,j+1,kk)
+                +      fracx *     fracz *flux_y(ii,j+1,kk);
+        }
+
+        divergence = divergence
+                   + (afrac_y(i,j+1,k) * fyp - afrac_y(i,j,k) * fym) * dyInv * mfsq;
     }
 
-    Real fym = flux_y(i,j,k);
-    if (afrac_y(i,j,k) != zero && afrac_y(i,j,k) != one) {
-        int ii = i + static_cast<int>(std::copysign(one,fcy(i,j,k,0)));
-        int kk = k + static_cast<int>(std::copysign(one,fcy(i,j,k,1)));
-        Real fracx = (mask(ii,j-1,k) || mask(ii,j,k)) ? std::abs(fcy(i,j,k,0)) : zero;
-        Real fracz = (mask(i,j-1,kk) || mask(i,j,kk)) ? std::abs(fcy(i,j,k,1)) : zero;
-        fym = (one-fracx)*(one-fracz)*fym
-            +      fracx *(one-fracz)*flux_y(ii,j,k )
-            +      fracz *(one-fracx)*flux_y(i ,j,kk)
-            +      fracx *     fracz *flux_y(ii,j,kk);
+    {
+        Real fzm = flux_z(i,j,k);
+        if (afrac_z(i,j,k) != zero && afrac_z(i,j,k) != one) {
+            int ii = i + static_cast<int>(std::copysign(one,fcz(i,j,k,0)));
+            int jj = j + static_cast<int>(std::copysign(one,fcz(i,j,k,1)));
+            Real fracx = (mask(ii,j,k-1) || mask(ii,j,k)) ? std::abs(fcz(i,j,k,0)) : zero;
+            Real fracy = (mask(i,jj,k-1) || mask(i,jj,k)) ? std::abs(fcz(i,j,k,1)) : zero;
+            fzm = (one-fracx)*(one-fracy)*fzm
+                +      fracx *(one-fracy)*flux_z(ii,j ,k)
+                +      fracy *(one-fracx)*flux_z(i ,jj,k)
+                +      fracx *     fracy *flux_z(ii,jj,k);
+        }
+
+        Real fzp = flux_z(i,j,k+1);
+        if (afrac_z(i,j,k+1) != zero && afrac_z(i,j,k+1) != one) {
+            int ii = i + static_cast<int>(std::copysign(one,fcz(i,j,k+1,0)));
+            int jj = j + static_cast<int>(std::copysign(one,fcz(i,j,k+1,1)));
+            Real fracx = (mask(ii,j,k) || mask(ii,j,k+1)) ? std::abs(fcz(i,j,k+1,0)) : zero;
+            Real fracy = (mask(i,jj,k) || mask(i,jj,k+1)) ? std::abs(fcz(i,j,k+1,1)) : zero;
+            fzp = (one-fracx)*(one-fracy)*fzp
+                +      fracx *(one-fracy)*flux_z(ii,j ,k+1)
+                +      fracy *(one-fracx)*flux_z(i ,jj,k+1)
+                +      fracx *     fracy *flux_z(ii,jj,k+1);
+        }
+
+        divergence = divergence
+                   + (afrac_z(i,j,k+1) * fzp - afrac_z(i,j,k) * fzm) * dzInv;
     }
 
-    Real fyp = flux_y(i,j+1,k);
-    if (afrac_y(i,j+1,k) != zero && afrac_y(i,j+1,k) != one) {
-        int ii = i + static_cast<int>(std::copysign(one,fcy(i,j+1,k,0)));
-        int kk = k + static_cast<int>(std::copysign(one,fcy(i,j+1,k,1)));
-        Real fracx = (mask(ii,j,k) || mask(ii,j+1,k)) ? std::abs(fcy(i,j+1,k,0)) : zero;
-        Real fracz = (mask(i,j,kk) || mask(i,j+1,kk)) ? std::abs(fcy(i,j+1,k,1)) : zero;
-        fyp = (one-fracx)*(one-fracz)*fyp
-            +      fracx *(one-fracz)*flux_y(ii,j+1,k )
-            +      fracz *(one-fracx)*flux_y(i ,j+1,kk)
-            +      fracx *     fracz *flux_y(ii,j+1,kk);
-    }
-
-    Real fzm = flux_z(i,j,k);
-    if (afrac_z(i,j,k) != zero && afrac_z(i,j,k) != one) {
-        int ii = i + static_cast<int>(std::copysign(one,fcz(i,j,k,0)));
-        int jj = j + static_cast<int>(std::copysign(one,fcz(i,j,k,1)));
-        Real fracx = (mask(ii,j,k-1) || mask(ii,j,k)) ? std::abs(fcz(i,j,k,0)) : zero;
-        Real fracy = (mask(i,jj,k-1) || mask(i,jj,k)) ? std::abs(fcz(i,j,k,1)) : zero;
-        fzm = (one-fracx)*(one-fracy)*fzm
-            +      fracx *(one-fracy)*flux_z(ii,j ,k)
-            +      fracy *(one-fracx)*flux_z(i ,jj,k)
-            +      fracx *     fracy *flux_z(ii,jj,k);
-    }
-
-    Real fzp = flux_z(i,j,k+1);
-    if (afrac_z(i,j,k+1) != zero && afrac_z(i,j,k+1) != one) {
-        int ii = i + static_cast<int>(std::copysign(one,fcz(i,j,k+1,0)));
-        int jj = j + static_cast<int>(std::copysign(one,fcz(i,j,k+1,1)));
-        Real fracx = (mask(ii,j,k) || mask(ii,j,k+1)) ? std::abs(fcz(i,j,k+1,0)) : zero;
-        Real fracy = (mask(i,jj,k) || mask(i,jj,k+1)) ? std::abs(fcz(i,j,k+1,1)) : zero;
-        fzp = (one-fracx)*(one-fracy)*fzp
-            +      fracx *(one-fracy)*flux_z(ii,j ,k+1)
-            +      fracy *(one-fracx)*flux_z(i ,jj,k+1)
-            +      fracx *     fracy *flux_z(ii,jj,k+1);
-    }
-
-    return - ( (afrac_x(i+1, j  , k  ) * fxp - afrac_x(i, j, k) * fxm) * dxInv * mfsq
-             + (afrac_y(i  , j+1, k  ) * fyp - afrac_y(i, j, k) * fym) * dyInv * mfsq
-             + (afrac_z(i  , j  , k+1) * fzp - afrac_z(i, j, k) * fzm) * dzInv ) / vfrac(i,j,k);
+    return - divergence / vfrac(i,j,k);
 }
 
 } // namespace
