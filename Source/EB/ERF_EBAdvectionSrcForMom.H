@@ -28,135 +28,6 @@ momentum_stencil_is_regular (const amrex::EBCellFlagFab& flag_fab,
            flag_fab.getType(stencil_box) == amrex::FabType::regular;
 }
 
-[[nodiscard]] inline amrex::Box
-paired_flux_box (const amrex::Box& flux_box, int dir)
-{
-    amrex::Box result = flux_box;
-    result.setBig(dir, flux_box.smallEnd(dir) + (flux_box.length(dir) - 1) / 2);
-    return result;
-}
-
-template<int Dir, typename InterpType>
-AMREX_GPU_DEVICE AMREX_FORCE_INLINE
-void
-regular_interpolate (const InterpType& high_order,
-                     const CENTERED2& centered,
-                     int i, int j, int k,
-                     amrex::Real mass_flux,
-                     amrex::Real& value) noexcept
-{
-    if (mass_flux > zero || mass_flux < zero) {
-        if constexpr (Dir == 0) {
-            high_order.InterpolateInX(i,j,k,0,value,mass_flux);
-        } else if constexpr (Dir == 1) {
-            high_order.InterpolateInY(i,j,k,0,value,mass_flux);
-        } else {
-            high_order.InterpolateInZ(i,j,k,0,value,mass_flux);
-        }
-    } else {
-        if constexpr (Dir == 0) {
-            centered.InterpolateInX(i,j,k,0,value,mass_flux);
-        } else if constexpr (Dir == 1) {
-            centered.InterpolateInY(i,j,k,0,value,mass_flux);
-        } else {
-            centered.InterpolateInZ(i,j,k,0,value,mass_flux);
-        }
-    }
-}
-
-template<int Dir, typename InterpType>
-AMREX_GPU_DEVICE AMREX_FORCE_INLINE
-void
-regular_interpolate_pair (const InterpType& high_order,
-                          const CENTERED2& centered,
-                          int i, int j, int k,
-                          amrex::Real mass_flux_lo,
-                          amrex::Real mass_flux_hi,
-                          amrex::Real& value_lo,
-                          amrex::Real& value_hi) noexcept
-{
-    bool const high_order_lo = mass_flux_lo > zero || mass_flux_lo < zero;
-    bool const high_order_hi = mass_flux_hi > zero || mass_flux_hi < zero;
-
-    if (high_order_lo && high_order_hi) {
-        high_order.template InterpolatePair<Dir>(i, j, k, 0, value_lo, value_hi,
-                                                 mass_flux_lo, mass_flux_hi);
-    } else {
-        regular_interpolate<Dir>(high_order, centered, i, j, k, mass_flux_lo, value_lo);
-        if constexpr (Dir == 0) {
-            regular_interpolate<Dir>(high_order, centered, i+1, j, k, mass_flux_hi, value_hi);
-        } else if constexpr (Dir == 1) {
-            regular_interpolate<Dir>(high_order, centered, i, j+1, k, mass_flux_hi, value_hi);
-        } else {
-            regular_interpolate<Dir>(high_order, centered, i, j, k+1, mass_flux_hi, value_hi);
-        }
-    }
-}
-
-template<int StencilSize>
-AMREX_GPU_DEVICE AMREX_FORCE_INLINE
-int
-regular_w_vertical_cells (int k, int lo_z_face, int hi_z_face,
-                          amrex::Real mass_flux) noexcept
-{
-    int cells = (mass_flux > zero || mass_flux < zero) ? StencilSize : 0;
-    if (k == hi_z_face || k == lo_z_face+1) {
-        cells = amrex::min(cells, 1);
-    } else if (k == hi_z_face-1 || k == lo_z_face+2) {
-        cells = amrex::min(cells, 2);
-    }
-    return cells;
-}
-
-template<int StencilSize, typename InterpType>
-AMREX_GPU_DEVICE AMREX_FORCE_INLINE
-void
-regular_w_vertical_interpolate (const InterpType& high_order,
-                                const CENTERED2& centered,
-                                const UPWIND3& upwind3,
-                                int i, int j, int k, int cells,
-                                amrex::Real mass_flux,
-                                amrex::Real& value) noexcept
-{
-    if (cells == StencilSize) {
-        high_order.InterpolateInZ(i,j,k,0,value,mass_flux);
-    } else if (cells <= 1) {
-        centered.InterpolateInZ(i,j,k,0,value,mass_flux);
-    } else if (cells == 2) {
-        upwind3.InterpolateInZ(i,j,k,0,value,mass_flux);
-    }
-}
-
-template<int StencilSize, typename InterpType>
-AMREX_GPU_DEVICE AMREX_FORCE_INLINE
-void
-regular_w_vertical_interpolate_pair (const InterpType& high_order,
-                                     const CENTERED2& centered,
-                                     const UPWIND3& upwind3,
-                                     int i, int j, int k,
-                                     int cells_lo, int cells_hi,
-                                     amrex::Real mass_flux_lo,
-                                     amrex::Real mass_flux_hi,
-                                     amrex::Real& value_lo,
-                                     amrex::Real& value_hi) noexcept
-{
-    if (cells_lo == StencilSize && cells_hi == StencilSize) {
-        high_order.template InterpolatePair<2>(i, j, k, 0, value_lo, value_hi,
-                                               mass_flux_lo, mass_flux_hi);
-    } else if (cells_lo <= 1 && cells_hi <= 1) {
-        centered.template InterpolatePair<2>(i, j, k, 0, value_lo, value_hi,
-                                             mass_flux_lo, mass_flux_hi);
-    } else if (cells_lo == 2 && cells_hi == 2) {
-        upwind3.template InterpolatePair<2>(i, j, k, 0, value_lo, value_hi,
-                                           mass_flux_lo, mass_flux_hi);
-    } else {
-        regular_w_vertical_interpolate<StencilSize>(
-            high_order, centered, upwind3, i, j, k, cells_lo, mass_flux_lo, value_lo);
-        regular_w_vertical_interpolate<StencilSize>(
-            high_order, centered, upwind3, i, j, k+1, cells_hi, mass_flux_hi, value_hi);
-    }
-}
-
 } // namespace erf_advection_detail
 
 /**
@@ -223,8 +94,8 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
     const int ncells_w_horz = interp_w_horz.GetUpwindCellNumber();
     const int ncells_w_vert = interp_w_vert.GetUpwindCellNumber();
 
-    static constexpr int horizontal_stencil_size = InterpType_H::GetUpwindCellNumber();
-    static constexpr int vertical_stencil_size = InterpType_V::GetUpwindCellNumber();
+    const int horizontal_stencil_size = interp_u_horz.GetUpwindCellNumber();
+    const int vertical_stencil_size = interp_u_vert.GetUpwindCellNumber();
 
     amrex::GpuArray<bool, AMREX_SPACEDIM> u_stencil_is_regular{false, false, false};
     amrex::GpuArray<bool, AMREX_SPACEDIM> v_stencil_is_regular{false, false, false};
@@ -299,86 +170,39 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
     // Use a distinct kernel type so proven-regular launches do not capture or
     // compile EB area fractions, flag scans, or unreachable order fallbacks.
     if (u_has_regular_stencils) {
-        amrex::Box const u_x_pair_box = erf_advection_detail::paired_flux_box(bxx_grown[0], 0);
-        amrex::Box const u_y_pair_box = erf_advection_detail::paired_flux_box(bxx_grown[1], 1);
-        amrex::Box const u_z_pair_box = erf_advection_detail::paired_flux_box(bxx_grown[2], 2);
-        int const u_x_lo = bxx_grown[0].smallEnd(0);
-        int const u_y_lo = bxx_grown[1].smallEnd(1);
-        int const u_z_lo = bxx_grown[2].smallEnd(2);
-        int const u_x_hi = bxx_grown[0].bigEnd(0);
-        int const u_y_hi = bxx_grown[1].bigEnd(1);
-        int const u_z_hi = bxx_grown[2].bigEnd(2);
-
-        amrex::ParallelFor(u_x_pair_box, u_y_pair_box, u_z_pair_box,
+        amrex::ParallelFor(bxx_grown[0], bxx_grown[1], bxx_grown[2],
         [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
         {
-            int const ii = u_x_lo + 2 * (i - u_x_lo);
-            amrex::Real const rho_um1 = rho_u(ii-1,j,k);
-            amrex::Real const rho_u0 = rho_u(ii,j,k);
-            amrex::Real const mf_um1 = mf_ux_inv(ii-1,j,0);
-            amrex::Real const mf_u0 = mf_ux_inv(ii,j,0);
-            amrex::Real const rho_u_avg0 = myhalf * (rho_um1 * mf_um1 + rho_u0 * mf_u0);
-            amrex::Real interpx0 = zero;
-
-            if (ii < u_x_hi) {
-                amrex::Real const rho_up1 = rho_u(ii+1,j,k);
-                amrex::Real const mf_up1 = mf_ux_inv(ii+1,j,0);
-                amrex::Real const rho_u_avg1 = myhalf * (rho_u0 * mf_u0 + rho_up1 * mf_up1);
-                amrex::Real interpx1 = zero;
-                erf_advection_detail::regular_interpolate_pair<0>(
-                    interp_u_horz, interp_u_CEN2, ii, j, k,
-                    rho_u_avg0, rho_u_avg1, interpx0, interpx1);
-                flx_u_arr[0](ii,j,k) = rho_u_avg0 * interpx0;
-                flx_u_arr[0](ii+1,j,k) = rho_u_avg1 * interpx1;
+            amrex::Real rho_u_avg = myhalf * (rho_u(i-1,j,k) * mf_ux_inv(i-1,j,0) + rho_u(i,j,k) * mf_ux_inv(i,j,0));
+            amrex::Real interpx = zero;
+            if (rho_u_avg > zero || rho_u_avg < zero) {
+                interp_u_horz.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
             } else {
-                erf_advection_detail::regular_interpolate<0>(
-                    interp_u_horz, interp_u_CEN2, ii, j, k, rho_u_avg0, interpx0);
-                flx_u_arr[0](ii,j,k) = rho_u_avg0 * interpx0;
+                interp_u_CEN2.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
             }
+            flx_u_arr[0](i,j,k) = rho_u_avg * interpx;
         },
         [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
         {
-            int const jj = u_y_lo + 2 * (j - u_y_lo);
-            amrex::Real const rho_v_avg0 = myhalf * (
-                rho_v(i,jj,k) * mf_vx_inv(i,jj,0) +
-                rho_v(i-1,jj,k) * mf_vx_inv(i-1,jj,0));
-            amrex::Real interpy0 = zero;
-
-            if (jj < u_y_hi) {
-                amrex::Real const rho_v_avg1 = myhalf * (
-                    rho_v(i,jj+1,k) * mf_vx_inv(i,jj+1,0) +
-                    rho_v(i-1,jj+1,k) * mf_vx_inv(i-1,jj+1,0));
-                amrex::Real interpy1 = zero;
-                erf_advection_detail::regular_interpolate_pair<1>(
-                    interp_u_horz, interp_u_CEN2, i, jj, k,
-                    rho_v_avg0, rho_v_avg1, interpy0, interpy1);
-                flx_u_arr[1](i,jj,k) = rho_v_avg0 * interpy0;
-                flx_u_arr[1](i,jj+1,k) = rho_v_avg1 * interpy1;
+            amrex::Real rho_v_avg = myhalf * (rho_v(i,j,k) * mf_vx_inv(i,j,0) + rho_v(i-1,j,k) * mf_vx_inv(i-1,j,0));
+            amrex::Real interpy = zero;
+            if (rho_v_avg > zero || rho_v_avg < zero) {
+                interp_u_horz.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
             } else {
-                erf_advection_detail::regular_interpolate<1>(
-                    interp_u_horz, interp_u_CEN2, i, jj, k, rho_v_avg0, interpy0);
-                flx_u_arr[1](i,jj,k) = rho_v_avg0 * interpy0;
+                interp_u_CEN2.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
             }
+            flx_u_arr[1](i,j,k) = rho_v_avg * interpy;
         },
         [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
         {
-            int const kk = u_z_lo + 2 * (k - u_z_lo);
-            amrex::Real const rho_w_avg0 = myhalf * (rho_w(i,j,kk) + rho_w(i-1,j,kk));
-            amrex::Real interpz0 = zero;
-
-            if (kk < u_z_hi) {
-                amrex::Real const rho_w_avg1 = myhalf * (rho_w(i,j,kk+1) + rho_w(i-1,j,kk+1));
-                amrex::Real interpz1 = zero;
-                erf_advection_detail::regular_interpolate_pair<2>(
-                    interp_u_vert, interp_u_CEN2, i, j, kk,
-                    rho_w_avg0, rho_w_avg1, interpz0, interpz1);
-                flx_u_arr[2](i,j,kk) = rho_w_avg0 * interpz0;
-                flx_u_arr[2](i,j,kk+1) = rho_w_avg1 * interpz1;
+            amrex::Real rho_w_avg = myhalf * (rho_w(i,j,k) + rho_w(i-1,j,k));
+            amrex::Real interpz = zero;
+            if (rho_w_avg > zero || rho_w_avg < zero) {
+                interp_u_vert.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
             } else {
-                erf_advection_detail::regular_interpolate<2>(
-                    interp_u_vert, interp_u_CEN2, i, j, kk, rho_w_avg0, interpz0);
-                flx_u_arr[2](i,j,kk) = rho_w_avg0 * interpz0;
+                interp_u_CEN2.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
             }
+            flx_u_arr[2](i,j,k) = rho_w_avg * interpz;
         });
     } else {
         amrex::ParallelFor(bxx_grown[0], bxx_grown[1], bxx_grown[2],
@@ -554,86 +378,39 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
     // ---------------------------------------------------- //
 
     if (v_has_regular_stencils) {
-        amrex::Box const v_x_pair_box = erf_advection_detail::paired_flux_box(bxy_grown[0], 0);
-        amrex::Box const v_y_pair_box = erf_advection_detail::paired_flux_box(bxy_grown[1], 1);
-        amrex::Box const v_z_pair_box = erf_advection_detail::paired_flux_box(bxy_grown[2], 2);
-        int const v_x_lo = bxy_grown[0].smallEnd(0);
-        int const v_y_lo = bxy_grown[1].smallEnd(1);
-        int const v_z_lo = bxy_grown[2].smallEnd(2);
-        int const v_x_hi = bxy_grown[0].bigEnd(0);
-        int const v_y_hi = bxy_grown[1].bigEnd(1);
-        int const v_z_hi = bxy_grown[2].bigEnd(2);
-
-        amrex::ParallelFor(v_x_pair_box, v_y_pair_box, v_z_pair_box,
+        amrex::ParallelFor(bxy_grown[0], bxy_grown[1], bxy_grown[2],
         [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
         {
-            int const ii = v_x_lo + 2 * (i - v_x_lo);
-            amrex::Real const rho_u_avg0 = myhalf * (
-                rho_u(ii,j,k) * mf_uy_inv(ii,j,0) +
-                rho_u(ii,j-1,k) * mf_uy_inv(ii,j-1,0));
-            amrex::Real interpx0 = zero;
-
-            if (ii < v_x_hi) {
-                amrex::Real const rho_u_avg1 = myhalf * (
-                    rho_u(ii+1,j,k) * mf_uy_inv(ii+1,j,0) +
-                    rho_u(ii+1,j-1,k) * mf_uy_inv(ii+1,j-1,0));
-                amrex::Real interpx1 = zero;
-                erf_advection_detail::regular_interpolate_pair<0>(
-                    interp_v_horz, interp_v_CEN2, ii, j, k,
-                    rho_u_avg0, rho_u_avg1, interpx0, interpx1);
-                flx_v_arr[0](ii,j,k) = rho_u_avg0 * interpx0;
-                flx_v_arr[0](ii+1,j,k) = rho_u_avg1 * interpx1;
+            amrex::Real rho_u_avg = myhalf * (rho_u(i,j,k) * mf_uy_inv(i,j,0) + rho_u(i,j-1,k) * mf_uy_inv(i,j-1,0));
+            amrex::Real interpx = zero;
+            if (rho_u_avg > zero || rho_u_avg < zero) {
+                interp_v_horz.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
             } else {
-                erf_advection_detail::regular_interpolate<0>(
-                    interp_v_horz, interp_v_CEN2, ii, j, k, rho_u_avg0, interpx0);
-                flx_v_arr[0](ii,j,k) = rho_u_avg0 * interpx0;
+                interp_v_CEN2.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
             }
+            flx_v_arr[0](i,j,k) = rho_u_avg * interpx;
         },
         [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
         {
-            int const jj = v_y_lo + 2 * (j - v_y_lo);
-            amrex::Real const rho_vm1 = rho_v(i,jj-1,k);
-            amrex::Real const rho_v0 = rho_v(i,jj,k);
-            amrex::Real const mf_vm1 = mf_vy_inv(i,jj-1,0);
-            amrex::Real const mf_v0 = mf_vy_inv(i,jj,0);
-            amrex::Real const rho_v_avg0 = myhalf * (rho_v0 * mf_v0 + rho_vm1 * mf_vm1);
-            amrex::Real interpy0 = zero;
-
-            if (jj < v_y_hi) {
-                amrex::Real const rho_vp1 = rho_v(i,jj+1,k);
-                amrex::Real const mf_vp1 = mf_vy_inv(i,jj+1,0);
-                amrex::Real const rho_v_avg1 = myhalf * (rho_vp1 * mf_vp1 + rho_v0 * mf_v0);
-                amrex::Real interpy1 = zero;
-                erf_advection_detail::regular_interpolate_pair<1>(
-                    interp_v_horz, interp_v_CEN2, i, jj, k,
-                    rho_v_avg0, rho_v_avg1, interpy0, interpy1);
-                flx_v_arr[1](i,jj,k) = rho_v_avg0 * interpy0;
-                flx_v_arr[1](i,jj+1,k) = rho_v_avg1 * interpy1;
+            amrex::Real rho_v_avg = myhalf * (rho_v(i,j,k) * mf_vy_inv(i,j,0) + rho_v(i,j-1,k) * mf_vy_inv(i,j-1,0));
+            amrex::Real interpy = zero;
+            if (rho_v_avg > zero || rho_v_avg < zero) {
+                interp_v_horz.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
             } else {
-                erf_advection_detail::regular_interpolate<1>(
-                    interp_v_horz, interp_v_CEN2, i, jj, k, rho_v_avg0, interpy0);
-                flx_v_arr[1](i,jj,k) = rho_v_avg0 * interpy0;
+                interp_v_CEN2.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
             }
+            flx_v_arr[1](i,j,k) = rho_v_avg * interpy;
         },
         [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
         {
-            int const kk = v_z_lo + 2 * (k - v_z_lo);
-            amrex::Real const rho_w_avg0 = myhalf * (rho_w(i,j,kk) + rho_w(i,j-1,kk));
-            amrex::Real interpz0 = zero;
-
-            if (kk < v_z_hi) {
-                amrex::Real const rho_w_avg1 = myhalf * (rho_w(i,j,kk+1) + rho_w(i,j-1,kk+1));
-                amrex::Real interpz1 = zero;
-                erf_advection_detail::regular_interpolate_pair<2>(
-                    interp_v_vert, interp_v_CEN2, i, j, kk,
-                    rho_w_avg0, rho_w_avg1, interpz0, interpz1);
-                flx_v_arr[2](i,j,kk) = rho_w_avg0 * interpz0;
-                flx_v_arr[2](i,j,kk+1) = rho_w_avg1 * interpz1;
+            amrex::Real rho_w_avg = myhalf * (rho_w(i,j,k) + rho_w(i,j-1,k));
+            amrex::Real interpz = zero;
+            if (rho_w_avg > zero || rho_w_avg < zero) {
+                interp_v_vert.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
             } else {
-                erf_advection_detail::regular_interpolate<2>(
-                    interp_v_vert, interp_v_CEN2, i, j, kk, rho_w_avg0, interpz0);
-                flx_v_arr[2](i,j,kk) = rho_w_avg0 * interpz0;
+                interp_v_CEN2.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
             }
+            flx_v_arr[2](i,j,k) = rho_w_avg * interpz;
         });
     } else {
         amrex::ParallelFor(bxy_grown[0], bxy_grown[1], bxy_grown[2],
@@ -809,117 +586,57 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
     // ---------------------------------------------------- //
 
     if (w_has_regular_stencils) {
-        amrex::Box const w_x_pair_box = erf_advection_detail::paired_flux_box(bxz_grown[0], 0);
-        amrex::Box const w_y_pair_box = erf_advection_detail::paired_flux_box(bxz_grown[1], 1);
-        amrex::Box const w_z_pair_box = erf_advection_detail::paired_flux_box(bxz_grown[2], 2);
-        int const w_x_lo = bxz_grown[0].smallEnd(0);
-        int const w_y_lo = bxz_grown[1].smallEnd(1);
-        int const w_z_lo = bxz_grown[2].smallEnd(2);
-        int const w_x_hi = bxz_grown[0].bigEnd(0);
-        int const w_y_hi = bxz_grown[1].bigEnd(1);
-        int const w_z_hi = bxz_grown[2].bigEnd(2);
-
-        amrex::ParallelFor(w_x_pair_box, w_y_pair_box, w_z_pair_box,
+        amrex::ParallelFor(bxz_grown[0], bxz_grown[1], bxz_grown[2],
         [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
         {
-            int const ii = w_x_lo + 2 * (i - w_x_lo);
-            amrex::Real const rho_u_avg0 = myhalf * (
-                rho_u(ii,j,k) + rho_u(ii,j,k-1)) * mf_ux_inv(ii,j,0);
-            amrex::Real interpx0 = zero;
-
-            if (ii < w_x_hi) {
-                amrex::Real const rho_u_avg1 = myhalf * (
-                    rho_u(ii+1,j,k) + rho_u(ii+1,j,k-1)) * mf_ux_inv(ii+1,j,0);
-                amrex::Real interpx1 = zero;
-                erf_advection_detail::regular_interpolate_pair<0>(
-                    interp_w_horz, interp_w_CEN2, ii, j, k,
-                    rho_u_avg0, rho_u_avg1, interpx0, interpx1);
-                flx_w_arr[0](ii,j,k) = rho_u_avg0 * interpx0;
-                flx_w_arr[0](ii+1,j,k) = rho_u_avg1 * interpx1;
+            amrex::Real rho_u_avg = myhalf * (rho_u(i,j,k) + rho_u(i,j,k-1)) * mf_ux_inv(i,j,0);
+            amrex::Real interpx = zero;
+            if (rho_u_avg > zero || rho_u_avg < zero) {
+                interp_w_horz.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
             } else {
-                erf_advection_detail::regular_interpolate<0>(
-                    interp_w_horz, interp_w_CEN2, ii, j, k, rho_u_avg0, interpx0);
-                flx_w_arr[0](ii,j,k) = rho_u_avg0 * interpx0;
+                interp_w_CEN2.InterpolateInX(i,j,k,0,interpx,rho_u_avg);
             }
+            flx_w_arr[0](i,j,k) = rho_u_avg * interpx;
         },
         [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
         {
-            int const jj = w_y_lo + 2 * (j - w_y_lo);
-            amrex::Real const rho_v_avg0 = myhalf * (
-                rho_v(i,jj,k) + rho_v(i,jj,k-1)) * mf_vy_inv(i,jj,0);
-            amrex::Real interpy0 = zero;
-
-            if (jj < w_y_hi) {
-                amrex::Real const rho_v_avg1 = myhalf * (
-                    rho_v(i,jj+1,k) + rho_v(i,jj+1,k-1)) * mf_vy_inv(i,jj+1,0);
-                amrex::Real interpy1 = zero;
-                erf_advection_detail::regular_interpolate_pair<1>(
-                    interp_w_horz, interp_w_CEN2, i, jj, k,
-                    rho_v_avg0, rho_v_avg1, interpy0, interpy1);
-                flx_w_arr[1](i,jj,k) = rho_v_avg0 * interpy0;
-                flx_w_arr[1](i,jj+1,k) = rho_v_avg1 * interpy1;
+            amrex::Real rho_v_avg = myhalf * (rho_v(i,j,k) + rho_v(i,j,k-1)) * mf_vy_inv(i,j,0);
+            amrex::Real interpy = zero;
+            if (rho_v_avg > zero || rho_v_avg < zero) {
+                interp_w_horz.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
             } else {
-                erf_advection_detail::regular_interpolate<1>(
-                    interp_w_horz, interp_w_CEN2, i, jj, k, rho_v_avg0, interpy0);
-                flx_w_arr[1](i,jj,k) = rho_v_avg0 * interpy0;
+                interp_w_CEN2.InterpolateInY(i,j,k,0,interpy,rho_v_avg);
             }
+            flx_w_arr[1](i,j,k) = rho_v_avg * interpy;
         },
         [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
         {
-            int const kk = w_z_lo + 2 * (k - w_z_lo);
-            bool const has_second = kk < w_z_hi;
-            bool const direct0 = kk == lo_z_face || kk == hi_z_face+1;
-            bool const direct1 = has_second &&
-                                 (kk+1 == lo_z_face || kk+1 == hi_z_face+1);
-
-            if (direct0) {
-                flx_w_arr[2](i,j,kk) = rho_w(i,j,kk) * w(i,j,kk);
-            }
-            if (direct1) {
-                flx_w_arr[2](i,j,kk+1) = rho_w(i,j,kk+1) * w(i,j,kk+1);
-            }
-
-            if (!direct0 && has_second && !direct1) {
-                amrex::Real const rho_wm1 = rho_w(i,j,kk-1);
-                amrex::Real const rho_w0 = rho_w(i,j,kk);
-                amrex::Real const rho_wp1 = rho_w(i,j,kk+1);
-                amrex::Real const rho_w_avg0 = myhalf * (rho_w0 + rho_wm1);
-                amrex::Real const rho_w_avg1 = myhalf * (rho_wp1 + rho_w0);
-                int const kcell0 = erf_advection_detail::regular_w_vertical_cells<
-                    vertical_stencil_size>(kk, lo_z_face, hi_z_face, rho_w_avg0);
-                int const kcell1 = erf_advection_detail::regular_w_vertical_cells<
-                    vertical_stencil_size>(kk+1, lo_z_face, hi_z_face, rho_w_avg1);
-                amrex::Real interpz0 = zero;
-                amrex::Real interpz1 = zero;
-                erf_advection_detail::regular_w_vertical_interpolate_pair<
-                    vertical_stencil_size>(interp_w_vert, interp_w_CEN2, interp_w_UPW3,
-                                           i, j, kk, kcell0, kcell1,
-                                           rho_w_avg0, rho_w_avg1, interpz0, interpz1);
-                flx_w_arr[2](i,j,kk) = rho_w_avg0 * interpz0;
-                flx_w_arr[2](i,j,kk+1) = rho_w_avg1 * interpz1;
+            if (k==lo_z_face || k==hi_z_face+1) {
+                flx_w_arr[2](i,j,k) = rho_w(i,j,k) * w(i,j,k);
             } else {
-                if (!direct0) {
-                    amrex::Real const rho_w_avg0 = myhalf * (
-                        rho_w(i,j,kk) + rho_w(i,j,kk-1));
-                    int const kcell0 = erf_advection_detail::regular_w_vertical_cells<
-                        vertical_stencil_size>(kk, lo_z_face, hi_z_face, rho_w_avg0);
-                    amrex::Real interpz0 = zero;
-                    erf_advection_detail::regular_w_vertical_interpolate<
-                        vertical_stencil_size>(interp_w_vert, interp_w_CEN2, interp_w_UPW3,
-                                               i, j, kk, kcell0, rho_w_avg0, interpz0);
-                    flx_w_arr[2](i,j,kk) = rho_w_avg0 * interpz0;
+                amrex::Real rho_w_avg = myhalf * (rho_w(i,j,k) + rho_w(i,j,k-1));
+                int kcell = 0;
+                if (rho_w_avg > zero || rho_w_avg < zero) {
+                    kcell = ncells_w_vert;
                 }
-                if (has_second && !direct1) {
-                    amrex::Real const rho_w_avg1 = myhalf * (
-                        rho_w(i,j,kk+1) + rho_w(i,j,kk));
-                    int const kcell1 = erf_advection_detail::regular_w_vertical_cells<
-                        vertical_stencil_size>(kk+1, lo_z_face, hi_z_face, rho_w_avg1);
-                    amrex::Real interpz1 = zero;
-                    erf_advection_detail::regular_w_vertical_interpolate<
-                        vertical_stencil_size>(interp_w_vert, interp_w_CEN2, interp_w_UPW3,
-                                               i, j, kk+1, kcell1, rho_w_avg1, interpz1);
-                    flx_w_arr[2](i,j,kk+1) = rho_w_avg1 * interpz1;
+
+                if (k == hi_z_face || k == lo_z_face+1) {
+                    kcell=std::min(kcell,1);
+                } else if (k == hi_z_face-1 || k == lo_z_face+2 ) {
+                    kcell=std::min(kcell,2);
                 }
+
+                amrex::Real interpz = zero;
+                if (kcell==ncells_w_vert) {
+                    interp_w_vert.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
+                } else {
+                    if (kcell<=1) {
+                        interp_w_CEN2.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
+                    } else if (kcell==2) {
+                        interp_w_UPW3.InterpolateInZ(i,j,k,0,interpz,rho_w_avg);
+                    }
+                }
+                flx_w_arr[2](i,j,k) = rho_w_avg * interpz;
             }
         });
     } else {
