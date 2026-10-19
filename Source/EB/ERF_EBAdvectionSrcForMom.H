@@ -5,6 +5,31 @@
 #include <ERF_IndexDefines.H>
 #include <ERF_Interpolation.H>
 
+namespace erf_advection_detail {
+
+/**
+ * \brief Return whether the complete directional interpolation footprint is regular.
+ *
+ * For a flux at index i, a positive-flow scan reads [i-N,i-1] and a
+ * negative-flow scan reads [i,i+N-1].  Growing the complete flux box by N on
+ * the low side and N-1 on the high side therefore covers both signs.
+ */
+[[nodiscard]] inline bool
+momentum_stencil_is_regular (const amrex::EBCellFlagFab& flag_fab,
+                             const amrex::Box& flux_box,
+                             const int dir,
+                             const int stencil_size)
+{
+    amrex::Box stencil_box = amrex::convert(flux_box, flag_fab.box().ixType());
+    stencil_box.growLo(dir, stencil_size);
+    stencil_box.growHi(dir, stencil_size - 1);
+
+    return flag_fab.box().contains(stencil_box) &&
+           flag_fab.getType(stencil_box) == amrex::FabType::regular;
+}
+
+} // namespace erf_advection_detail
+
 /**
  * \brief Build EB momentum fluxes with selected horizontal and vertical interpolation.
  *
@@ -29,6 +54,9 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
                             const amrex::FabType u_type,
                             const amrex::FabType v_type,
                             const amrex::FabType w_type,
+                            const amrex::EBCellFlagFab& u_flag_fab,
+                            const amrex::EBCellFlagFab& v_flag_fab,
+                            const amrex::EBCellFlagFab& w_flag_fab,
                             const amrex::Array4<const amrex::EBCellFlag>& u_cflag,
                             const amrex::Array4<const amrex::Real>& u_afrac_x,
                             const amrex::Array4<const amrex::Real>& u_afrac_y,
@@ -66,6 +94,38 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
     const int ncells_w_horz = interp_w_horz.GetUpwindCellNumber();
     const int ncells_w_vert = interp_w_vert.GetUpwindCellNumber();
 
+    const int horizontal_stencil_size = interp_u_horz.GetUpwindCellNumber();
+    const int vertical_stencil_size = interp_u_vert.GetUpwindCellNumber();
+
+    amrex::GpuArray<bool, AMREX_SPACEDIM> u_stencil_is_regular{false, false, false};
+    amrex::GpuArray<bool, AMREX_SPACEDIM> v_stencil_is_regular{false, false, false};
+    amrex::GpuArray<bool, AMREX_SPACEDIM> w_stencil_is_regular{false, false, false};
+
+    if (u_type == amrex::FabType::regular) {
+        for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+            const int stencil_size = (dir < 2) ? horizontal_stencil_size
+                                               : vertical_stencil_size;
+            u_stencil_is_regular[dir] = erf_advection_detail::momentum_stencil_is_regular(
+                u_flag_fab, bxx_grown[dir], dir, stencil_size);
+        }
+    }
+    if (v_type == amrex::FabType::regular) {
+        for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+            const int stencil_size = (dir < 2) ? horizontal_stencil_size
+                                               : vertical_stencil_size;
+            v_stencil_is_regular[dir] = erf_advection_detail::momentum_stencil_is_regular(
+                v_flag_fab, bxy_grown[dir], dir, stencil_size);
+        }
+    }
+    if (w_type == amrex::FabType::regular) {
+        for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+            const int stencil_size = (dir < 2) ? horizontal_stencil_size
+                                               : vertical_stencil_size;
+            w_stencil_is_regular[dir] = erf_advection_detail::momentum_stencil_is_regular(
+                w_flag_fab, bxz_grown[dir], dir, stencil_size);
+        }
+    }
+
     // Instantiate structs for lower-order vert/horiz interp (commonly using upw_frac_h)
     CENTERED2 interp_u_CEN2(u, 0);
     CENTERED2 interp_v_CEN2(v, 0);
@@ -83,6 +143,16 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
     bool v_is_singlevalued = (v_type == amrex::FabType::singlevalued);
     bool w_is_singlevalued = (w_type == amrex::FabType::singlevalued);
 
+    const bool u_x_stencil_is_regular = u_stencil_is_regular[0];
+    const bool u_y_stencil_is_regular = u_stencil_is_regular[1];
+    const bool u_z_stencil_is_regular = u_stencil_is_regular[2];
+    const bool v_x_stencil_is_regular = v_stencil_is_regular[0];
+    const bool v_y_stencil_is_regular = v_stencil_is_regular[1];
+    const bool v_z_stencil_is_regular = v_stencil_is_regular[2];
+    const bool w_x_stencil_is_regular = w_stencil_is_regular[0];
+    const bool w_y_stencil_is_regular = w_stencil_is_regular[1];
+    const bool w_z_stencil_is_regular = w_stencil_is_regular[2];
+
     // ---------------------------------------------------- //
     // x-momentum
     // ---------------------------------------------------- //
@@ -99,7 +169,13 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
 
             int icell = 0;
 
-            if (rho_u_avg>zero)
+            if (u_x_stencil_is_regular)
+            {
+                if (rho_u_avg > zero || rho_u_avg < zero) {
+                    icell = ncells_u_horz;
+                }
+            }
+            else if (rho_u_avg>zero)
             {
                 for (int ii=0; ii<ncells_u_horz; ++ii) {
                     if (u_cflag(i-ii-1,j,k).isCovered()) {
@@ -148,7 +224,13 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
 
             int jcell = 0;
 
-            if (rho_v_avg>zero)
+            if (u_y_stencil_is_regular)
+            {
+                if (rho_v_avg > zero || rho_v_avg < zero) {
+                    jcell = ncells_u_horz;
+                }
+            }
+            else if (rho_v_avg>zero)
             {
                 for (int jj=0; jj<ncells_u_horz; ++jj) {
                     if (u_cflag(i,j-jj-1,k).isCovered()) {
@@ -197,7 +279,13 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
 
             int kcell = 0;
 
-            if (rho_w_avg>zero)
+            if (u_z_stencil_is_regular)
+            {
+                if (rho_w_avg > zero || rho_w_avg < zero) {
+                    kcell = ncells_u_vert;
+                }
+            }
+            else if (rho_w_avg>zero)
             {
                 for (int kk=0; kk<ncells_u_vert; ++kk) {
                     if (u_cflag(i,j,k-kk-1).isCovered()) {
@@ -252,7 +340,13 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
 
             int icell = 0;
 
-            if (rho_u_avg>zero)
+            if (v_x_stencil_is_regular)
+            {
+                if (rho_u_avg > zero || rho_u_avg < zero) {
+                    icell = ncells_v_horz;
+                }
+            }
+            else if (rho_u_avg>zero)
             {
                 for (int ii=0; ii<ncells_v_horz; ++ii) {
                     if (v_cflag(i-ii-1,j,k).isCovered()) {
@@ -301,7 +395,13 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
 
             int jcell = 0;
 
-            if (rho_v_avg>zero)
+            if (v_y_stencil_is_regular)
+            {
+                if (rho_v_avg > zero || rho_v_avg < zero) {
+                    jcell = ncells_v_horz;
+                }
+            }
+            else if (rho_v_avg>zero)
             {
                 for (int jj=0; jj<ncells_v_horz; ++jj) {
                     if (v_cflag(i,j-jj-1,k).isCovered()) {
@@ -350,7 +450,13 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
 
             int kcell = 0;
 
-            if (rho_w_avg>zero)
+            if (v_z_stencil_is_regular)
+            {
+                if (rho_w_avg > zero || rho_w_avg < zero) {
+                    kcell = ncells_v_vert;
+                }
+            }
+            else if (rho_w_avg>zero)
             {
                 for (int kk=0; kk<ncells_v_vert; ++kk) {
                     if (v_cflag(i,j,k-kk-1).isCovered()) {
@@ -405,7 +511,13 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
 
             int icell = 0;
 
-            if (rho_u_avg>zero)
+            if (w_x_stencil_is_regular)
+            {
+                if (rho_u_avg > zero || rho_u_avg < zero) {
+                    icell = ncells_w_horz;
+                }
+            }
+            else if (rho_u_avg>zero)
             {
                 for (int ii=0; ii<ncells_w_horz; ++ii) {
                     if (w_cflag(i-ii-1,j,k).isCovered()) {
@@ -454,7 +566,13 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
 
             int jcell = 0;
 
-            if (rho_v_avg>zero)
+            if (w_y_stencil_is_regular)
+            {
+                if (rho_v_avg > zero || rho_v_avg < zero) {
+                    jcell = ncells_w_horz;
+                }
+            }
+            else if (rho_v_avg>zero)
             {
                 for (int jj=0; jj<ncells_w_horz; ++jj) {
                     if (w_cflag(i,j-jj-1,k).isCovered()) {
@@ -508,7 +626,13 @@ EBAdvectionSrcForMomWrapper (const amrex::Vector<amrex::Box>& bxx_grown,
 
                 int kcell = 0;
 
-                if (rho_w_avg>zero)
+                if (w_z_stencil_is_regular)
+                {
+                    if (rho_w_avg > zero || rho_w_avg < zero) {
+                        kcell = ncells_w_vert;
+                    }
+                }
+                else if (rho_w_avg>zero)
                 {
                     for (int kk=0; kk<ncells_w_vert; ++kk) {
                         if (w_cflag(i,j,k-kk-1).isCovered()) {
@@ -576,6 +700,9 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                         const amrex::FabType u_type,
                         const amrex::FabType v_type,
                         const amrex::FabType w_type,
+                        const amrex::EBCellFlagFab& u_flag_fab,
+                        const amrex::EBCellFlagFab& v_flag_fab,
+                        const amrex::EBCellFlagFab& w_flag_fab,
                         const amrex::Array4<const amrex::EBCellFlag>& u_cflag,
                         const amrex::Array4<const amrex::Real>& u_afrac_x,
                         const amrex::Array4<const amrex::Real>& u_afrac_y,
@@ -605,6 +732,7 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                                 bxx_grown, bxy_grown, bxz_grown,
                                 rho_u, rho_v, rho_w, u, v, w,
                                 u_type, v_type, w_type,
+                                u_flag_fab, v_flag_fab, w_flag_fab,
                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -618,6 +746,7 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                                 bxx_grown, bxy_grown, bxz_grown,
                                 rho_u, rho_v, rho_w, u, v, w,
                                 u_type, v_type, w_type,
+                                u_flag_fab, v_flag_fab, w_flag_fab,
                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -631,6 +760,7 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                                 bxx_grown, bxy_grown, bxz_grown,
                                 rho_u, rho_v, rho_w, u, v, w,
                                 u_type, v_type, w_type,
+                                u_flag_fab, v_flag_fab, w_flag_fab,
                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -644,6 +774,7 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                                 bxx_grown, bxy_grown, bxz_grown,
                                 rho_u, rho_v, rho_w, u, v, w,
                                 u_type, v_type, w_type,
+                                u_flag_fab, v_flag_fab, w_flag_fab,
                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -657,6 +788,7 @@ EBAdvectionSrcForMomVert (const amrex::Vector<amrex::Box>& bxx_grown,
                                 bxx_grown, bxy_grown, bxz_grown,
                                 rho_u, rho_v, rho_w, u, v, w,
                                 u_type, v_type, w_type,
+                                u_flag_fab, v_flag_fab, w_flag_fab,
                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,

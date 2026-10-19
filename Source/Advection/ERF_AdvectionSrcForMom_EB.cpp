@@ -115,7 +115,8 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
 
     // EB u-factory
     auto const* u_factory = ebfact.get_u_const_factory();
-    Array4<const EBCellFlag> u_cflag = u_factory->getMultiEBCellFlagFab()[mfi].const_array();
+    const auto& u_flag_fab = u_factory->getMultiEBCellFlagFab()[mfi];
+    Array4<const EBCellFlag> u_cflag = u_flag_fab.const_array();
     Array4<const Real> u_vfrac = u_factory->getVolFrac().const_array(mfi);
     Array4<const Real> u_afrac_x{};
     Array4<const Real> u_afrac_y{};
@@ -123,7 +124,7 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
     Array4<const Real> u_fcx{};
     Array4<const Real> u_fcy{};
     Array4<const Real> u_fcz{};
-    FabType u_type = u_factory->getMultiEBCellFlagFab()[mfi].getType(bxx);
+    FabType u_type = u_flag_fab.getType(bxx);
 
     if (u_type == FabType::singlevalued) {
         u_afrac_x = u_factory->getAreaFrac()[0]->const_array(mfi);
@@ -136,7 +137,8 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
 
     // EB v-factory
     auto const* v_factory = ebfact.get_v_const_factory();
-    Array4<const EBCellFlag> v_cflag = v_factory->getMultiEBCellFlagFab()[mfi].const_array();
+    const auto& v_flag_fab = v_factory->getMultiEBCellFlagFab()[mfi];
+    Array4<const EBCellFlag> v_cflag = v_flag_fab.const_array();
     Array4<const Real> v_vfrac = v_factory->getVolFrac().const_array(mfi);
     Array4<const Real> v_afrac_x{};
     Array4<const Real> v_afrac_y{};
@@ -144,7 +146,7 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
     Array4<const Real> v_fcx{};
     Array4<const Real> v_fcy{};
     Array4<const Real> v_fcz{};
-    FabType v_type = v_factory->getMultiEBCellFlagFab()[mfi].getType();
+    FabType v_type = v_flag_fab.getType();
     if (v_type == FabType::singlevalued) {
         v_afrac_x = v_factory->getAreaFrac()[0]->const_array(mfi);
         v_afrac_y = v_factory->getAreaFrac()[1]->const_array(mfi);
@@ -156,7 +158,8 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
 
     // EB w-factory
     auto const* w_factory = ebfact.get_w_const_factory();
-    Array4<const EBCellFlag> w_cflag = w_factory->getMultiEBCellFlagFab()[mfi].const_array();
+    const auto& w_flag_fab = w_factory->getMultiEBCellFlagFab()[mfi];
+    Array4<const EBCellFlag> w_cflag = w_flag_fab.const_array();
     Array4<const Real> w_vfrac = w_factory->getVolFrac().const_array(mfi);
     Array4<const Real> w_afrac_x{};
     Array4<const Real> w_afrac_y{};
@@ -164,7 +167,7 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
     Array4<const Real> w_fcx{};
     Array4<const Real> w_fcy{};
     Array4<const Real> w_fcz{};
-    FabType w_type = w_factory->getMultiEBCellFlagFab()[mfi].getType();
+    FabType w_type = w_flag_fab.getType();
     if (w_type == FabType::singlevalued) {
         w_afrac_x = w_factory->getAreaFrac()[0]->const_array(mfi);
         w_afrac_y = w_factory->getAreaFrac()[1]->const_array(mfi);
@@ -315,6 +318,7 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
             EBAdvectionSrcForMomVert<CENTERED2>(bxx_grown, bxy_grown, bxz_grown,
                                                 rho_u, rho_v, omega, u, v, w,
                                                 u_type, v_type, w_type,
+                                                u_flag_fab, v_flag_fab, w_flag_fab,
                                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -327,6 +331,7 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
             EBAdvectionSrcForMomVert<UPWIND3>(  bxx_grown, bxy_grown, bxz_grown,
                                                 rho_u, rho_v, omega, u, v, w,
                                                 u_type, v_type, w_type,
+                                                u_flag_fab, v_flag_fab, w_flag_fab,
                                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -339,6 +344,7 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
             EBAdvectionSrcForMomVert<CENTERED4>(bxx_grown, bxy_grown, bxz_grown,
                                                 rho_u, rho_v, omega, u, v, w,
                                                 u_type, v_type, w_type,
+                                                u_flag_fab, v_flag_fab, w_flag_fab,
                                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -351,6 +357,7 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
             EBAdvectionSrcForMomVert<UPWIND5>(  bxx_grown, bxy_grown, bxz_grown,
                                                 rho_u, rho_v, omega, u, v, w,
                                                 u_type, v_type, w_type,
+                                                u_flag_fab, v_flag_fab, w_flag_fab,
                                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
@@ -363,6 +370,7 @@ AdvectionSrcForMom_EB ( const MFIter& mfi,
             EBAdvectionSrcForMomVert<CENTERED6>(bxx_grown, bxy_grown, bxz_grown,
                                                 rho_u, rho_v, omega, u, v, w,
                                                 u_type, v_type, w_type,
+                                                u_flag_fab, v_flag_fab, w_flag_fab,
                                                 u_cflag, u_afrac_x, u_afrac_y, u_afrac_z,
                                                 v_cflag, v_afrac_x, v_afrac_y, v_afrac_z,
                                                 w_cflag, w_afrac_x, w_afrac_y, w_afrac_z,
