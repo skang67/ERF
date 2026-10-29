@@ -12,6 +12,8 @@
 #include "ERF_MicrophysicsConstants.H"
 #include "ERF_TerrainMetrics.H"
 #include "Prob/ERF_ProblemDispatch.H"
+#include "Prob/ERF_ProbHeights.H"
+#include "Prob/ERF_MoistPerturbation.H"
 
 using namespace amrex;
 
@@ -98,6 +100,7 @@ Problem::init_custom_pert (
     Array4<Real      > const& p_hse,
     Array4<Real const> const& z_nd,
     Array4<Real const> const& z_cc,
+    Array4<Real const> const& z_sfc_nd,
     GeometryData const& geomdata,
     Array4<Real const> const&   mf_m,
     const SolverChoice& sc,
@@ -198,8 +201,9 @@ Problem::init_custom_pert (
     else if (my_prob_name_ci == "bellforest") {
         // No state perturbation; uniform flow is set in init_custom_pert_vels
     }
-    else if (my_prob_name_ci == "wps"   ||
-             my_prob_name_ci == "metgrid") {
+    else if (my_prob_name_ci == "wps"     ||
+             my_prob_name_ci == "metgrid" ||
+             my_prob_name_ci == "perlin07") {
 #include "Prob/ERF_InitCustomPert_KE.H"
     }
     else {
@@ -219,6 +223,7 @@ Problem::init_custom_pert_vels (
     Array4<Real      > const& y_vel_pert,
     Array4<Real      > const& z_vel_pert,
     Array4<Real const> const& z_nd,
+    Array4<Real const> const& z_sfc_nd,
     GeometryData const& geomdata,
     Array4<Real const> const& mf_u,
     Array4<Real const> const& mf_v,
@@ -328,7 +333,8 @@ void
 Problem::update_rhotheta_sources (const double& time,
                                   amrex::MultiFab* src,
                                   const Geometry& geom,
-                                  std::unique_ptr<MultiFab>& z_phys_cc)
+                                  std::unique_ptr<MultiFab>& z_phys_cc,
+                                  const Vector<Real>& zlevels_stag)
 {
     if (src->empty()) return;
 
@@ -344,8 +350,10 @@ Problem::update_rhotheta_sources (const double& time,
     Gpu::DeviceVector<Real> d_zlevels;
     d_zlevels.resize(khi+1);
 
+    // The case formulas take heights above the bottom of the domain
     if (z_phys_cc) {
-        reduce_to_max_per_height(zlevels, z_phys_cc);
+        reduce_to_max_per_height(zlevels, z_phys_cc, zlevels_stag);
+        for (auto& z : zlevels) { z -= geom.ProbLo(2); }
         amrex::Gpu::copy(amrex::Gpu::hostToDevice, zlevels.begin(), zlevels.end(), d_zlevels.begin());
     }
 
@@ -357,7 +365,12 @@ Problem::update_rhotheta_sources (const double& time,
 
     if (my_prob_name_ci == "bomex") {
 #include "Prob/ERF_UpdateRhoThetaSources_Bomex.H"
-    } else if (my_prob_name_ci == "constant_rhotheta_src") {
+    } else if (my_prob_name_ci == "constant_rhotheta_src" ||
+               my_prob_name_ci == "perlin07") {
+        // perlin07 is the idealized coastal upwelling case of Perlin et al.
+        // (2007), which applies a uniform 1 K/day radiative cooling; it uses
+        // the same height-independent tendency as constant_rhotheta_src, set
+        // through prob.advection_heating_rate.
 #include "Prob/ERF_UpdateRhoThetaSources_Constant.H"
     } else if (my_prob_name_ci == "rico") {
 #include "Prob/ERF_UpdateRhoThetaSources_RICO.H"
@@ -376,7 +389,8 @@ void
 Problem::update_rhoqt_sources (const double& time,
                                amrex::MultiFab* qsrc,
                                const Geometry& geom,
-                               std::unique_ptr<MultiFab>& z_phys_cc)
+                               std::unique_ptr<MultiFab>& z_phys_cc,
+                               const Vector<Real>& zlevels_stag)
 {
     if (qsrc->empty()) return;
 
@@ -392,8 +406,10 @@ Problem::update_rhoqt_sources (const double& time,
     Gpu::DeviceVector<Real> d_zlevels;
     d_zlevels.resize(khi+1);
 
+    // The case formulas take heights above the bottom of the domain
     if (z_phys_cc) {
-        reduce_to_max_per_height(zlevels, z_phys_cc);
+        reduce_to_max_per_height(zlevels, z_phys_cc, zlevels_stag);
+        for (auto& z : zlevels) { z -= geom.ProbLo(2); }
         amrex::Gpu::copy(amrex::Gpu::hostToDevice, zlevels.begin(), zlevels.end(), d_zlevels.begin());
     }
 
@@ -427,7 +443,8 @@ Problem::update_w_subsidence (const double& time,
                               Gpu::DeviceVector<Real>& d_wbar,
                               const amrex::MultiFab& state,
                               const Geometry& geom,
-                              std::unique_ptr<MultiFab>& z_phys_nd)
+                              std::unique_ptr<MultiFab>& z_phys_nd,
+                              const Vector<Real>& zlevels_stag)
 {
     if (wbar.empty()) return;
 
@@ -438,8 +455,10 @@ Problem::update_w_subsidence (const double& time,
     // grid stretching exists.
     Vector<Real> zlevels;
     zlevels.resize(khi+2);
+    // The case formulas take heights above the bottom of the domain
     if (z_phys_nd) {
-        reduce_to_max_per_height(zlevels, z_phys_nd);
+        reduce_to_max_per_height(zlevels, z_phys_nd, zlevels_stag);
+        for (auto& z : zlevels) { z -= geom.ProbLo(2); }
     }
 
     ParmParse pp_erf("erf");
@@ -470,7 +489,8 @@ Problem::update_geostrophic_profile (const double& /*time*/,
                                      Vector<Real>& v_geos,
                                      Gpu::DeviceVector<Real>& d_v_geos,
                                      const Geometry& geom,
-                                     std::unique_ptr<MultiFab>& z_phys_cc)
+                                     std::unique_ptr<MultiFab>& z_phys_cc,
+                                     const Vector<Real>& zlevels_stag)
 {
     if (u_geos.empty()) return;
 
@@ -481,8 +501,10 @@ Problem::update_geostrophic_profile (const double& /*time*/,
     // grid stretching exists.
     Vector<Real> zlevels;
     zlevels.resize(khi+1);
+    // The case formulas take heights above the bottom of the domain
     if (z_phys_cc) {
-        reduce_to_max_per_height(zlevels, z_phys_cc);
+        reduce_to_max_per_height(zlevels, z_phys_cc, zlevels_stag);
+        for (auto& z : zlevels) { z -= geom.ProbLo(2); }
     }
 
     ParmParse pp_erf("erf");

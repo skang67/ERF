@@ -11,10 +11,13 @@ those parts of the dynamical core.
 
 .. note::
 
-   The auxiliary-state layer is currently an implementation interface, not a
-   user-selectable generic tracer package. Its live ERF consumer is a
-   test-only inert tracer used to qualify the coupling described on this page.
-   The spectral-bin microphysics state is not yet advanced through this path.
+   The auxiliary-state layer is an implementation interface, not a
+   user-selectable generic tracer package. Its qualification consumer remains
+   a test-only inert tracer. Spectral-bin microphysics is also a live user
+   of the same mapped-measure, host-stage, dry-air-carrier, mapped-divergence,
+   and completed-step-transfer contracts. SBM supplies its own particle-bin
+   semantics, coupled transport acceptance, canonical-state checks,
+   cloud/rain projection, restart, and boundary policy.
 
 Why auxiliary state exists
 --------------------------
@@ -427,11 +430,21 @@ runtime capability.
 Relationship to spectral-bin microphysics
 -----------------------------------------
 
-The SBM spectral state is separately owned outside ERF's core conserved-state
-array and is expected to use this auxiliary transport substrate for its
-physical-space transport. At the present revision that connection has not yet
-been made: ``erf.moisture_model = SBM`` remains a bounded zero-transport
-infrastructure configuration.
+The SBM spectral state is owned separately from ERF's core conserved-state
+array. ``SBMTransport`` uses the generic mapped auxiliary-state interfaces
+for the static mapped measure, host-stage timing, dry-air mass carrier,
+conservative transport update, and accepted completed-step accounting. SBM
+retains ownership of spectral-bin coordinates, mass/number admissibility,
+and cloud/rain projection. The inert tracer remains a small proof consumer
+of the shared transport infrastructure.
+
+The code also contains independently tested SBM-specific operators for
+conservative mapped restriction, dry-air-relative prolongation, explicit
+old/new spectral time views, and an all-component accepted-transfer record.
+These methods are not yet connected to the complete adaptive-grid lifecycle.
+Operational SBM simulations remain single-level and triply periodic;
+coarse/fine time interpolation, flux correction, regridding, multilevel
+restart, and nonperiodic spectral boundaries are not yet available.
 
 The auxiliary layer addresses transport between atmospheric grid cells. It
 does not define how an SBM particle distribution is represented or remapped in

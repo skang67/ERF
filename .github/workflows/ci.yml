@@ -1,32 +1,48 @@
 name: ERF CI
 
+# MPICH on merge only, not PR
 on:
-#  push:
-#    # branches: [development]
-#    paths-ignore:
-#      - Docs/**
-#      - README.rst
-#      - license.txt
-
-  pull_request:
+  push:
     branches: [development]
-    types: [opened, synchronize, reopened]
+    paths:
+      - '**'
+      - '!Docs/**'
+      - '!**.md'
+      - '!**.rst'
+      - '!license.txt'
+      - '!.github/workflows/**'
+      - '.github/workflows/ci.yml'
+      - '.github/actions/**'
+  workflow_dispatch:
 
+# Development pushes finish the active run and keep only the newest pending commit.
+# PR cancellation and commit-specific manual groups stay unchanged.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.head_ref || (github.event_name == 'push' && 'latest') || github.sha }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/development' }}
 
 jobs:
 
   Build-And-Test:
+    permissions:
+      contents: read
+      packages: write
     runs-on: ${{matrix.os}}
     timeout-minutes: 180
     name: OS ${{matrix.os}} - Particles ${{matrix.particles}}
     env:
       ERF_PARALLEL_TEST_NRANKS: '1;2;4'
+      CCACHE_TRUNK_KEY: ${{ matrix.os }}-x64-gcc-mpich-double-particles-${{ matrix.particles }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-22.04]
+        # The particles-ON leg also builds the fire coupling (ERF_ENABLE_FIRE,
+        # which adds the smoke scalar) with the example engine directory
+        # (Tests/FireEngineExample, compiled in from ERF_FIRE_ENGINE_DIRS as an
+        # out-of-tree engine would be) and runs its tests; the OFF leg keeps the
+        # default single-scalar layout. The CUDA build covers the coupling with
+        # no engine.
         particles: [OFF, ON]
         include:
         - os: ubuntu-22.04
@@ -39,6 +55,7 @@ jobs:
     - uses: actions/checkout@v7
       with:
         submodules: true
+        persist-credentials: false
 
     - name: Free disk space on Ubuntu
       uses: ./.github/actions/free-space-ubuntu
@@ -57,13 +74,25 @@ jobs:
     - name: Install CCache
       run: Submodules/AMReX/.github/workflows/dependencies/dependencies_ccache.sh
 
-    - name: Set Up Cache
-      uses: actions/cache@v6
+    - name: Restore Cache
+      id: ghcr-cache
+      uses: ./.github/actions/ccache-trunk
+      with:
+        mode: restore
+        key: ${{ env.CCACHE_TRUNK_KEY }}
+        path: ~/.cache/ccache
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    # Read-only fallback while GHCR trunks fill, and during registry outages.
+    - name: Restore legacy Actions cache
+      if: steps.ghcr-cache.outputs.hit != 'true'
+      continue-on-error: true
+      uses: actions/cache/restore@v6
       with:
         path: ~/.cache/ccache
-        key: ccache-${{ github.workflow }}-${{ github.job }}-git-${{ github.sha }}
+        key: ccache-${{ github.workflow }}-${{ github.job }}-${{ matrix.particles }}-git-${{ github.sha }}
         restore-keys: |
-             ccache-${{ github.workflow }}-${{ github.job }}-git-
+             ccache-${{ github.workflow }}-${{ github.job }}-${{ matrix.particles }}-git-
 
     - name: Configure CMake
       run: |
@@ -71,13 +100,18 @@ jobs:
           -B${{runner.workspace}}/ERF/build-${{matrix.os}} \
           -DCMAKE_INSTALL_PREFIX:PATH=${{runner.workspace}}/ERF/install \
           -DCMAKE_BUILD_TYPE:STRING=RelWithDebInfo \
+          -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O2 -g1 -DNDEBUG" \
           -DAMReX_ASSERTIONS:BOOL=ON \
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
           -DERF_DIM:STRING=3 \
           -DERF_ENABLE_MPI:BOOL=ON \
+          -DMPI_CXX_COMPILE_OPTIONS=-fno-lto \
+          -DMPI_CXX_LINK_FLAGS=-fno-lto \
           -DERF_PARALLEL_TEST_ALLOW_OVERSUBSCRIBE:BOOL=ON \
           '-DERF_PARALLEL_TEST_NRANKS:STRING=${{env.ERF_PARALLEL_TEST_NRANKS}}' \
           -DERF_ENABLE_PARTICLES:BOOL=${{matrix.particles}} \
+          -DERF_ENABLE_FIRE:BOOL=${{matrix.particles}} \
+          "-DERF_FIRE_ENGINE_DIRS:STRING=${{ matrix.particles == 'ON' && format('{0}/Tests/FireEngineExample', github.workspace) || '' }}" \
           -DERF_ENABLE_TESTS:BOOL=ON \
           -DERF_ENABLE_ALL_WARNINGS:BOOL=ON \
           -DERF_ENABLE_FCOMPARE:BOOL=ON \
@@ -89,24 +123,36 @@ jobs:
       run: |
         export CCACHE_COMPRESS=1
         export CCACHE_COMPRESSLEVEL=10
-        export CCACHE_MAXSIZE=600M
         ccache -z
+        build_start=$(date +%s)
 
         cmake \
           --build ${{runner.workspace}}/ERF/build-${{matrix.os}} \
           --parallel ${{env.NPROCS}} \
           2>&1 | tee -a ${{runner.workspace}}/build-output.txt;
 
-        ccache -s
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
+        ccache --evict-older-than "$(( $(date +%s) - build_start + 120 ))s"
+        ccache -s | tee -a "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
         du -hs ~/.cache/ccache
+
+    - name: Save Cache
+      if: always() && github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+      uses: ./.github/actions/ccache-trunk
+      with:
+        mode: save
+        key: ${{ env.CCACHE_TRUNK_KEY }}
+        path: ~/.cache/ccache
+        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Report
       run: |
         grep -Ei "warning:|error:" ${{runner.workspace}}/build-output.txt \
-          | grep -Ev "Submodules/(amrex|googletest)" | grep -Ev "lto-wrapper: warning:" | sort | uniq \
+          | grep -Ev "Submodules/(amrex|AMReX|googletest)" | grep -Ev "lto-wrapper: warning:" | sort | uniq \
           | awk 'BEGIN{i=0}{print $0}{i++}END{print "Warnings: "i}' > ${{runner.workspace}}/build-output-warnings.txt
         cat ${{runner.workspace}}/build-output-warnings.txt
-        export return=$(tail -n 1 ${{runner.workspace}}/build-output-warnings.txt | awk '{print $2}')
+        return=$(tail -n 1 ${{runner.workspace}}/build-output-warnings.txt | awk '{print $2}')
         exit ${return}
 
     - name: Check Unit Test Registration
@@ -228,7 +274,7 @@ jobs:
 
     - name: Run Serial Unit Tests
       run: |
-        ctest -L unit -LE parallel --output-on-failure --no-tests=error
+        ctest -L unit -j 4 -LE parallel --output-on-failure --no-tests=error
       working-directory: ${{runner.workspace}}/ERF/build-${{matrix.os}}
 
     - name: Run Parallel Tests

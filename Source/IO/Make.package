@@ -14,9 +14,12 @@ CEXE_sources += ERF_StationSampler.cpp
 CEXE_sources += ERF_Checkpoint.cpp
 CEXE_sources += ERF_Provenance.cpp
 CEXE_sources += ERF_WriteJobInfo.cpp
+CEXE_sources += ERF_NoahMPGitHash.cpp
 CEXE_headers += ERF_Provenance.H
+CEXE_headers += ERF_NoahMPGitHash.H
 CEXE_headers += ERF_IntervalMeansCheckpoint.H
 CEXE_headers += ERF_CheckpointSurfaceTemperature.H
+CEXE_headers += ERF_ReadCheckpointMF.H
 
 CEXE_headers += ERF_WriteBndryPlanes.H
 CEXE_headers += ERF_ReadBndryPlanes.H
@@ -49,7 +52,6 @@ ifeq ($(USE_NETCDF), TRUE)
   CEXE_sources += ERF_ReadFromMetgrid.cpp
   CEXE_sources += ERF_NCInterface.cpp
   CEXE_sources += ERF_NCPlotFile.cpp
-  CEXE_sources += ERF_NCColumnFile.cpp
   CEXE_headers += ERF_NCWpsFile.H
   CEXE_headers += ERF_NCInterface.H
   CEXE_headers += ERF_ReadFromWRFBdy.H

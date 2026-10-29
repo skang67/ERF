@@ -52,6 +52,7 @@ Problem::init_custom_pert (
     amrex::Array4<amrex::Real      > const& /*p_hse*/,
     amrex::Array4<amrex::Real const> const& /*z_nd*/,
     amrex::Array4<amrex::Real const> const& z_cc,
+    amrex::Array4<amrex::Real const> const& /*z_sfc_nd*/,
     amrex::GeometryData const& geomdata,
     amrex::Array4<amrex::Real const> const& /*mf_m*/,
     const SolverChoice& /*sc*/,
@@ -140,6 +141,7 @@ Problem::init_custom_pert_vels (
     Array4<Real      > const& y_vel_pert,
     Array4<Real      > const& z_vel_pert,
     amrex::Array4<amrex::Real const> const& z_nd,
+    amrex::Array4<amrex::Real const> const& /*z_sfc_nd*/,
     GeometryData const& geomdata,
     Array4<Real const> const& /*mf_u*/,
     Array4<Real const> const& /*mf_v*/,
@@ -226,7 +228,8 @@ Problem::update_w_subsidence (const double& /*time*/,
                               Gpu::DeviceVector<Real>& d_wbar,
                               const amrex::MultiFab& /*state*/,
                               const Geometry& geom,
-                              std::unique_ptr<MultiFab>& z_phys_nd)
+                              std::unique_ptr<MultiFab>& z_phys_nd,
+                              const Vector<Real>& zlevels_stag)
 {
     if (wbar.empty()) return;
 
@@ -239,7 +242,7 @@ Problem::update_w_subsidence (const double& /*time*/,
     // grid stretching exists.
     if (z_phys_nd) {
         zlevels.resize(khi+1);
-        reduce_to_max_per_height(zlevels, z_phys_nd);
+        reduce_to_max_per_height(zlevels, z_phys_nd, zlevels_stag);
     }
 
     // Linearly increase wbar to the cutoff_max and then linearly decrease to cutoff_min

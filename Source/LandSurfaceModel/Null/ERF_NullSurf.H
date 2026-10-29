@@ -193,6 +193,20 @@ class NullSurf {
     {}
 
     /**
+     * Returns whether the reference-level atmospheric fields have been filled.
+     */
+    virtual
+    bool
+    Lsm_Has_Atmos_State () { return true; }
+
+    /**
+     * Registers whether the source level's atmospheric fields have been filled.
+     */
+    virtual
+    void
+    Lsm_Set_Source_Has_Atmos_State (bool /*has_atmos_state*/) {}
+
+    /**
      * Returns the atmospheric geometry used by coupling fields.
      */
     virtual
@@ -235,6 +249,12 @@ class NullSurf {
     virtual
     bool
     Get_Update_Status () { return false; }
+
+    // Whether this level integrates a land model of its own from its own setup data, so
+    // that rebuilding the level would restart that state (Noah-MP; see NOAHMP::Init).
+    [[nodiscard]] virtual
+    bool
+    Runs_Own_Land_Driver () const { return false; }
 
     // Scalar LSM step counter (NoahMP itimestep). Persisted in checkpoint so
     // the LSM substepping schedule survives restart. 0 means "uninitialized".

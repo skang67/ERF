@@ -14,35 +14,36 @@ bin-resolved distribution. This is also different from the
 :ref:`sec:SuperDroplets` method, where the condensed phase is represented by
 Lagrangian computational particles that move through the Eulerian model grid.
 
-The purpose of spectral-bin microphysics is ultimately to resolve the
-hydrometeor size distribution and its evolution through physical processes
-rather than representing cloud and precipitation only through a few bulk
-categories. The current ERF SBM runtime establishes the state, configuration,
-ownership, projection, and restart infrastructure needed for that capability.
-ERF also contains a generic mapped transport substrate for prognostic states
-stored outside the core conserved-state array; its conservation, geometry,
-and time-integration contracts are documented in :ref:`AuxiliaryState`. At
-present that substrate is exercised with a test-only non-SBM inert tracer and
-is not yet connected to the SBM spectral state.
+A complete spectral-bin microphysics model can explicitly represent the
+particle-size distributions of aerosols and hydrometeors and their evolution
+through physical processes. ERF's currently exposed ``SBM`` option is
+narrower: it predicts a bin-resolved liquid-water distribution and advances
+it by resolved atmospheric advection on a single grid level. The code also
+contains independently tested state-time management and conservative
+coarse/fine spectral-transfer operators. These operators are foundations
+for future mesh-refined simulations, not an enabled multilevel capability.
+Aerosol evolution and cloud microphysical processes are not yet included.
+See :ref:`AuxiliaryState` for the reusable mapped-transport interface.
 
 .. warning::
 
-   The current ``SBM`` option is an infrastructure qualification mode, not yet
-   a production cloud-microphysics scheme.
+   The current ``SBM`` option provides resolved advection of a liquid-water
+   size distribution on one grid level. It is not yet a complete warm-cloud
+   or warm-rain microphysics scheme.
 
-   ERF currently stores and validates a liquid spectral distribution and keeps
-   the conventional bulk cloud- and rain-water fields consistent with that
-   distribution. The spectral state is intentionally not advected, diffused,
-   sedimented, or modified by cloud microphysical processes.
+   The liquid spectrum is the authoritative condensed-water state. It is
+   advected using ERF's dry-air mass carrier, high-order reconstruction,
+   coupled flux-corrected transport, and fixed projections to conventional
+   cloud- and rain-water fields.
 
-   Spectral advection, turbulent or molecular diffusion, condensation and
-   evaporation, aerosol activation, aerosol evolution, collision-coalescence,
-   sedimentation, precipitation, AMR spectral transport, and physical
-   spectral boundary conditions are not yet available through
-   ``erf.moisture_model = SBM``.
+   The runtime does not yet provide particle diffusion or turbulent mixing,
+   condensation/evaporation, aerosol activation or evolution,
+   collision-coalescence, sedimentation, precipitation, multilevel spectral
+   transport, or the full nonperiodic spectral-boundary lifecycle. Moving
+   terrain and embedded boundaries remain unsupported.
 
-   Unsupported configurations are rejected rather than silently reverting to
-   bulk-water transport.
+   Unsupported configurations are rejected rather than silently reverting
+   to bulk-water transport.
 
 Current spectral state
 ----------------------
@@ -473,38 +474,196 @@ microphysics options. Restart comparison is exact, and ERF does not
 automatically convert a checkpoint to a different representation or remapping
 policy.
 
-The contracts described here provide reference within-bin reconstruction and
-spectral-coordinate packet projection only. The current SBM runtime still
-performs no spectral advection, condensation or evaporation, aerosol
-activation, aerosol evolution, collision-coalescence, sedimentation, or
-precipitation.
+The representation, transport, and projection policies are versioned parts of
+the exact restart identity. Older zero-transport schemas are rejected rather
+than silently interpreted as the currently supported advection scheme.
 
 Auxiliary prognostic-state transport
 ------------------------------------
 
-The SBM spectral state is stored outside ERF's core conserved-state array.
-Its physical-space transport is therefore intended to use ERF's generic
-auxiliary-state transport substrate rather than introducing a second
-SBM-specific carrier, mapped-geometry convention, or time integrator. See
-:ref:`AuxiliaryState` for the generic conservation equations, host-stage
-semantics, completed-step flux ledger, verification evidence, and current
-qualification envelope.
+The SBM liquid spectrum is the authoritative liquid-water state. ERF advances
+this spectrum in physical space using the mapped auxiliary-state transport
+infrastructure and the atmospheric dynamical core's dry-air mass flux.
 
-At the present revision the SBM spectral state is **not** advanced through
-that transport substrate. ``erf.moisture_model = SBM`` therefore remains the
-bounded zero-transport infrastructure configuration described below. The
-non-SBM inert tracer used to qualify the generic substrate is a test fixture,
-not an SBM transport implementation and not a user-selectable tracer package.
+The low-order candidate is conservative donor transport. The high-order
+candidate uses ERF's native WENO-Z3 reconstruction. Two-moment liquid bins are
+reconstructed in endpoint-number coordinates before their face rates are
+transformed back to physical mass and number. A shared atomic-group FCT
+limiter constrains mass, number, and attached extensive properties together.
 
-The auxiliary-state layer addresses physical-space transport between
-atmospheric grid cells. It does not define SBM representation or redistribution
-in particle-mass space. The fixed-pivot and interval remapping contracts
-above are separate spectral-coordinate operations. Likewise, the generic
-transport substrate does not by itself provide SBM realizability-preserving
-limiting, sedimentation, aerosol activation, collision-coalescence, or other
-cloud microphysical processes. Those capabilities require their own scientific
-and numerical qualification before the current SBM zero-transport restriction
-can be relaxed.
+Projected ``qc`` and ``qr`` remain fixed diagnostics of the accepted liquid
+spectrum. They are refreshed from the spectrum and do not receive an
+independent liquid advection, diffusion, clipping, or microphysical update.
+
+Available end-to-end simulation evidence is deliberately bounded. It covers
+single-level, triply periodic advection on constant- and stretched-z grids,
+plus a one-step static Cos4Hill terrain-fitted case with terrain flat at the
+periodic boundaries. Direct transport tests also exercise nontrivial fluxes
+with a synthetic static mapped measure. These tests do not establish a
+nonperiodic terrain-boundary capability. Particle diffusion and turbulent
+mixing, multilevel spectral synchronization and reflux, nonperiodic spectral
+boundaries, condensation/evaporation, activation, collision-coalescence,
+sedimentation, and precipitation are not available in the runtime. Moving
+terrain and embedded boundaries remain unsupported.
+
+Conservative spectral transfer between grid resolutions
+-------------------------------------------------------
+
+Atmospheric simulations may use locally refined meshes around clouds,
+convective updrafts, or sharp moisture gradients. For spectral-bin
+microphysics, a change in atmospheric grid resolution must transfer the
+liquid-water and droplet-number inventories represented by each
+**spectral bin**. Transferring only bulk cloud-water and rain-water amounts would not
+preserve the underlying particle-size distribution: many different spectra
+can have the same bulk mixing ratios.
+
+The following state and transfer operations have been implemented and tested
+independently. They are needed to extend spectral-bin transport to refined
+atmospheric meshes, but are not yet part of the operational multilevel SBM
+runtime:
+
+* **Time-matched spectral states.** The bin-resolved distribution has explicit
+  previous and updated time views that follow ERF's atmospheric time advance.
+  A quantity expressed per unit dry-air mass is formed using dry-air density
+  from the matching time view, not from a different model stage.
+
+* **Conservative coarse-grid averaging.** For spectral component :math:`a`,
+  let :math:`U_a` be the stored density-weighted amount. Depending on the
+  component, this represents liquid-water mass per unit volume, droplet
+  number per unit volume, or an attached extensive inventory. ERF's mapped
+  conservative amount is
+
+  .. math::
+
+     H_a = \omega U_a, \qquad
+     \omega = \frac{\det J}{m_x m_y},
+
+  where :math:`\det J` is the terrain-coordinate Jacobian and :math:`m_x`
+  and :math:`m_y` are the horizontal map factors. For a coarse cell :math:`c`
+  completely covered by fine cells :math:`j`, restriction uses
+
+  .. math::
+
+     H_{a,c} = \frac{1}{N_c}\sum_{j\in\mathcal{C}(c)} H_{a,j},
+     \qquad
+     U_{a,c} = \frac{H_{a,c}}{\omega_c},
+
+  where :math:`\mathcal{C}(c)` contains the :math:`N_c` fine children of
+  cell :math:`c`. This preserves the represented mapped inventory to
+  floating-point accuracy. Coarse cells outside the fine-covered region
+  retain their previous spectral values exactly.
+
+* **Carrier-relative fine-grid transfer.** The operator forms the amount of each
+  component per unit mass of dry air,
+
+  .. math::
+
+     z_a = \frac{U_a}{\rho_d},
+
+  where :math:`\rho_d` is dry-air density. The fine-grid value is obtained
+  through piecewise-constant interpolation of :math:`z_a` followed by
+  reconstruction with the **fine-grid density at the same semantic time**:
+
+  .. math::
+
+     U_{a,\mathrm{fine}}
+     = \rho_{d,\mathrm{fine}}\,
+       z_{a,\mathrm{parent\ coarse}}.
+
+  Refining the atmospheric mesh thereby transfers a bin's dry-air-relative
+  abundance without treating the change in spatial resolution as a physical
+  droplet-growth, evaporation, or collision process.
+
+* **Accepted spectral face transfers.** The implementation defines and tests a completed-step
+  transport record for every spectral component,
+
+  .. math::
+
+     \mathcal{I}_{a,f}
+     = \int_{t^n}^{t^{n+1}}
+       \widetilde{F}_{a,f}^{\mathrm{accepted}}(t)\,dt,
+
+  where :math:`\widetilde{F}_{a,f}^{\mathrm{accepted}}` is the accepted
+  mapped transport rate through face :math:`f`. The record uses the rates
+  accepted after the coupled transport limiter, not an unrestricted
+  high-order proposal or the two bulk cloud/rain sums. It provides the
+  information needed for conservative coarse/fine flux correction in a
+  subsequent AMR implementation.
+
+* **Physical and numerical admissibility.** A transferred candidate spectrum
+  must still satisfy the declared mass, number, attached-property, and
+  spectral-bin ownership constraints. Invalid or numerically
+  unrepresentable candidates are rejected rather than repaired by clipping
+  or silent redistribution.
+
+.. important::
+
+   **These are tested grid-transfer foundations, not an enabled multilevel
+   SBM capability.** Although ERF supports adaptive mesh refinement for other
+   atmospheric quantities, simulations using ``erf.moisture_model = SBM``
+   still require ``amr.max_level = 0`` and periodic boundaries in all three
+   directions. Coarse/fine temporal interpolation, accepted-flux correction
+   (reflux), regridding, and multilevel spectral restart must be integrated
+   and qualified before SBM can run on refined meshes. These grid-transfer
+   foundations introduce no new user input parameters and no cloud or aerosol
+   microphysical source processes. The currently exposed spectrum represents
+   liquid water only.
+
+What is still needed for multilevel simulations
+-----------------------------------------------
+
+The present SBM runtime advects the liquid-water spectrum on one atmospheric
+grid level. The conservative grid-transfer operators described above have
+been tested separately, but they are not yet connected to ERF's complete
+adaptive-mesh lifecycle.
+
+A future multilevel simulation must interpolate coarse-grid spectral state
+and dry-air density to the same fine-grid time; reconcile the accepted
+bin-resolved transport across coarse/fine interfaces by conservative flux
+correction (reflux); and verify that the synchronized droplet-mass,
+number, and attached-property inventories remain physically admissible.
+Grid creation, regridding, restart, and physical boundary conditions must
+also preserve the full spectral state, rather than reconstructing a size
+distribution from bulk cloud-water and rain-water mixing ratios.
+
+A conservation budget for a refined simulation must count each atmospheric
+region only once, using fine-grid values where refinement is present and
+excluding the underlying coarse-grid cells. Multilevel spectral transport
+will remain unavailable until these coupled operations have been tested in
+ERF, including their failure behavior.
+
+Numerical reconstruction for resolved spectral advection
+--------------------------------------------------------
+
+The current high-order spectral advection method is
+``EndpointNumberWENOZ3``. This numerical-method identity is fixed by the
+implementation and is not a user-selectable SBM option. See
+:ref:`AuxiliaryState` for the mapped conservation and host-stage transport
+conventions.
+
+For the current implementation, ``EndpointNumberWENOZ3`` has a specific
+numerical meaning:
+
+* every transported component first uses the intensive dry-air coordinate
+  :math:`z_a=U_a/\rho_d` formed with the density from the same host stage;
+* each two-moment mass/number pair is transformed to endpoint-number
+  coordinates before high-order reconstruction and converted back to physical
+  mass and number face rates before grouped FCT;
+* one-moment components and attached extensive properties remain in their
+  physical intensive coordinates;
+* no per-component rescaling or normalization is applied before WENO-Z3;
+* reconstruction uses ERF's native ``AdvType::Weno_3Z`` / ``WENO_Z3`` stencil.
+  At this revision its linear weights are :math:`1/3` and :math:`2/3`, with a
+  fixed epsilon of ``1.e-12`` in ``AMREX_USE_FLOAT`` builds and ``1.e-40``
+  otherwise; and
+* the enabled SBM runtime is triply periodic, so its end-to-end simulations
+  do not exercise a physical-boundary high-order fallback. The declared
+  spectral boundary policy permits an admissible donor proposal when a
+  physical-boundary high-order stencil is not qualified.
+
+Changing the reconstruction basis, component normalization, WENO epsilon or
+stencil, or physical-boundary fallback is a numerical-method change requiring
+new qualification; it is not a formatting-only cleanup.
 
 SBM runtime inputs
 ------------------
@@ -514,19 +673,13 @@ The following inputs use the ``erf.`` prefix.
 ``erf.moisture_model``
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Select the current SBM infrastructure with
+Select the current single-level, advection-only SBM capability with
 
 ::
 
    erf.moisture_model = SBM
 
-At the present revision this also requires
-
-::
-
-   erf.sbm_zero_transport_fixture = true
-
-because production spectral transport has not yet been implemented.
+New SBM input files should omit the obsolete no-transport switch described below.
 
 ``erf.sbm_zero_transport_fixture``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -535,11 +688,10 @@ because production spectral transport has not yet been implemented.
 
 **Default:** ``false``
 
-This option must currently be ``true`` when ``erf.moisture_model = SBM``.
-
-It identifies the deliberately bounded zero-transport SBM configuration. It
-should not be interpreted as a physical switch that turns transport off in an
-otherwise complete spectral-bin microphysics scheme.
+This obsolete switch belonged to an earlier infrastructure-only test mode.
+It is not a supported option for current simulations. Omit it from new SBM
+input files. An explicitly true value is rejected rather than silently
+disabling spectral transport.
 
 ``erf.sbm_nbins``
 ~~~~~~~~~~~~~~~~~
@@ -690,20 +842,19 @@ also satisfy the per-bin realizability condition described above.
 Current execution restrictions
 ------------------------------
 
-The current SBM mode remains intentionally limited so that state ownership,
-projection, initialization, and restart can be tested without ambiguity from
-an incomplete spectral transport implementation. The generic auxiliary-state
-transport foundation described above does not yet change the supported SBM
-runtime envelope.
+The SBM runtime remains single-level. Independently tested grid-transfer
+operators do not yet enable mesh-refined SBM simulations. The following
+runtime restrictions apply:
 
 The current configuration requires:
 
 * a three-dimensional ERF build;
 * one AMR level, ``amr.max_level = 0``;
 * periodic boundaries in all three directions;
-* ``mesh_type = ConstantDz``;
-* no terrain-fitted or embedded-boundary geometry;
-* no immersed buildings;
+* static non-EB geometry; end-to-end evidence covers ``ConstantDz``,
+  ``StretchedDz``, and the triply periodic static ``Cos4Hill`` fitted-mesh
+  smoke profile, with terrain flat at the periodic boundaries;
+* no moving terrain, embedded boundaries, or immersed buildings;
 * ``substepping_type = None``;
 * no molecular scalar diffusion;
 * no turbulent scalar diffusion or PBL/SHOC transport acting on moisture;
@@ -715,22 +866,39 @@ The current configuration requires:
 * no sounding nudging;
 * no custom moisture forcing;
 * no real-data lateral boundary forcing; and
-* no problem setup that introduces problem-specific liquid forcing or custom
-  perturbations.
+* only the supported problem setups: the default/undefined setup,
+  ``Scalar Advection/Diffusion``, and ERF's dedicated periodic SBM test setup;
+  other problem-specific initialization or forcing is rejected.
 
-For the present fixture, ``erf.prob_name`` must therefore be either unset
-(``Undefined`` internally) or
+Anelastic SBM advection is supported only for the currently qualified
+non-fitted-terrain cases, including constant- and stretched-z grids.
+``StaticFittedMesh`` with ``VariableDz`` is explicitly rejected for anelastic
+SBM because ERF's fitted-terrain anelastic projection requires a nonperiodic
+vertical boundary, whereas the current spectral transport capability requires
+a triply periodic domain. This is a support-envelope restriction, not a
+different spectral carrier convention.
 
-::
+The resolved host dry-air carrier may be nonzero. SBM transport uses that
+carrier directly and checks the donor outgoing-demand condition at each host
+stage. For example, the native scalar-advection velocity initializer can be
+used in a periodic SBM advection case with:
 
-   erf.prob_name = "SBM zero-transport fixture"
+.. code-block:: text
 
-In addition, the resolved carrier momentum presented to scalar advection must
-remain exactly zero. A nonzero resolved flow causes ERF to stop rather than
-leave the spectral state behind while transporting only its bulk projection.
+   erf.prob_name = "Scalar Advection/Diffusion"
+   prob.U_0 = 0.8
+   prob.V_0 = 0.6
+   prob.W_0 = 0.4
 
-These restrictions make the present capability suitable for infrastructure
-qualification, not for a moving or evolving cloud simulation.
+Adaptive ERF timestep selection also applies the SBM donor-outflow restriction
+using the current mapped dry-air carrier. A user-specified fixed timestep that
+exceeds the current hard donor-positivity limit is rejected rather than
+silently subcycling the spectrum. The exact stage-time outgoing-demand check
+remains active as a fail-closed guard because the carrier used by a later host
+stage may differ from the pre-step estimate.
+
+The currently enabled SBM capability implements resolved advection only;
+cloud microphysical source processes are not yet coupled to the spectrum.
 
 One-moment example
 ------------------
@@ -740,11 +908,10 @@ test:
 
 .. code-block:: text
 
-   erf.prob_name = "SBM zero-transport fixture"
+   erf.prob_name = "Scalar Advection/Diffusion"
    erf.init_type = Uniform
 
    erf.moisture_model = SBM
-   erf.sbm_zero_transport_fixture = true
    erf.sbm_nbins = 4
    erf.sbm_cloud_rain_split = 2
    erf.sbm_fixture_initial_state = 1.e-6 2.e-6 3.e-6 4.e-6
@@ -759,14 +926,18 @@ test:
    amr.max_level = 0
    geometry.is_periodic = 1 1 1
 
+   prob.U_0 = 0.8
+   prob.V_0 = 0.6
+   prob.W_0 = 0.4
+
 The four initial-state values are the density-weighted liquid-water masses in
 the four bins, in :math:`\mathrm{kg\,m^{-3}}`.
 
 With ``erf.sbm_cloud_rain_split = 2``, the first two bins contribute to cloud
 water and the last two bins contribute to rain water.
 
-This example is a qualification fixture and should not be interpreted as a
-recommended atmospheric size distribution.
+The spatially uniform initial spectrum exercises the host carrier path but is
+not a recommended atmospheric size distribution.
 
 Two-moment example
 ------------------
@@ -775,11 +946,10 @@ The two-moment integration fixture uses:
 
 .. code-block:: text
 
-   erf.prob_name = "SBM zero-transport fixture"
+   erf.prob_name = "Scalar Advection/Diffusion"
    erf.init_type = Uniform
 
    erf.moisture_model = SBM
-   erf.sbm_zero_transport_fixture = true
    erf.sbm_nbins = 4
    erf.sbm_moment_mode = 2
    erf.sbm_cloud_rain_split = 2
@@ -789,6 +959,10 @@ The two-moment integration fixture uses:
    erf.sbm_fixture_initial_state = \
        1.5e-6 6.0e-6 1.8e-5 4.8e-5 \
        1.0e12 2.0e12 3.0e12 4.0e12
+
+   prob.U_0 = 0.8
+   prob.V_0 = 0.6
+   prob.W_0 = 0.4
 
 The first four initial-state values are the bin liquid-water mass densities
 :math:`M_i` in :math:`\mathrm{kg\,m^{-3}}`. The final four are the bin

@@ -9,7 +9,60 @@
 #include <optional>
 #include <AMReX_Math.H>
 
+#ifdef ERF_USE_NETCDF
+#include "ERF_MetgridLandUtils.H"
+#endif
+
 using namespace amrex;
+
+namespace {
+
+#ifdef ERF_USE_NETCDF
+/**
+ * The soil layer thicknesses (DZS) in a wrfinput file, or none if the file or the
+ * variable is not there.  Read on the I/O rank and broadcast.
+ *
+ * @param fname wrfinput file
+ */
+Vector<Real>
+read_wrfinput_soil_dz (const std::string& fname)
+{
+    int nsoil = 0;
+    Vector<double> dzs;
+    if (ParallelDescriptor::IOProcessor() && FileSystem::Exists(fname)) {
+        auto ncf = ncutils::NCFile::open(fname, NC_NOWRITE);
+        if (ncf.has_var("DZS")) {
+            auto var = ncf.var("DZS");
+            const std::vector<size_t> shape = var.shape();  // (Time, soil_layers_stag)
+            nsoil = static_cast<int>(shape.back());
+            dzs.resize(nsoil);
+            std::vector<size_t> start(shape.size(), 0);
+            std::vector<size_t> count(shape.size(), 1);
+            count.back() = static_cast<size_t>(nsoil);
+            var.get(dzs.data(), start, count);
+        }
+        ncf.close();
+    }
+    ParallelDescriptor::Bcast(&nsoil, 1, ParallelDescriptor::IOProcessorNumber());
+    dzs.resize(nsoil);
+    if (nsoil > 0) {
+        ParallelDescriptor::Bcast(dzs.data(), nsoil, ParallelDescriptor::IOProcessorNumber());
+    }
+    Vector<Real> dz(nsoil);
+    for (int k = 0; k < nsoil; ++k) { dz[k] = static_cast<Real>(dzs[k]); }
+    return dz;
+}
+#endif
+
+std::string
+soil_dz_string (const std::vector<Real>& dz)
+{
+    std::string str;
+    for (const Real v : dz) { str += (str.empty() ? "" : " ") + std::to_string(v); }
+    return str;
+}
+
+} // namespace
 
 
 /* Initialize lsm data structures */
@@ -24,7 +77,7 @@ SLM::Init (const int& /*lev*/,
            IntVect& /*refRatio*/,
            const Real& dt,
            std::unique_ptr<amrex::MultiFab>& z_phys_nd_in,
-           Vector<Vector<std::string>>& /*nc_init_file*/)
+           Vector<Vector<std::string>>& nc_init_file)
 {
     m_dt = dt;
     m_geom = geom;
@@ -33,15 +86,66 @@ SLM::Init (const int& /*lev*/,
     z_phys_nd = z_phys_nd_in.get();
 
     ParmParse pp("slm");
+    const bool have_nsoil = pp.contains("nsoil");
+    const bool have_dz    = pp.contains("soil_dz");
     pp.query("nsoil", m_nz_lsm);
+    m_dz_lsm.clear();
+    pp.queryarr("soil_dz", m_dz_lsm);
+
+    // The soil layers of the initial data, where they have them: the Noah layers SLM's
+    // state is interpolated to from met_em files, or the file's own DZS for wrfinput, which
+    // is what SLM's soil physics then uses.  Without slm.soil_dz SLM takes these; with it
+    // the two must agree, since slm.soil_dz sets the geometry the soil is plotted on.
+    Vector<Real> data_dz;
+    std::string data_source;
+#ifdef ERF_USE_NETCDF
+    if (m_init_type == InitType::Metgrid) {
+        data_dz.assign(metgrid_land::dzs_noah, metgrid_land::dzs_noah + metgrid_land::nsoil_noah);
+        data_source = "the Noah layers SLM is initialized on from met_em files";
+    } else if (m_init_type == InitType::WRFInput &&
+               !nc_init_file.empty() && !nc_init_file[0].empty()) {
+        data_dz = read_wrfinput_soil_dz(nc_init_file[0][0]);
+        data_source = "DZS in " + nc_init_file[0][0];
+    }
+#else
+    amrex::ignore_unused(nc_init_file);
+#endif
+
+    if (!data_dz.empty()) {
+        const int nsoil_data = static_cast<int>(data_dz.size());
+        if (!have_dz) {
+            if (have_nsoil && m_nz_lsm != nsoil_data) {
+                amrex::Abort("SLM: slm.nsoil = " + std::to_string(m_nz_lsm) + " but " + data_source
+                             + " has " + std::to_string(nsoil_data) + " layers ("
+                             + soil_dz_string(data_dz) + " m); leave slm.nsoil and slm.soil_dz unset to use them");
+            }
+            m_nz_lsm = nsoil_data;
+            m_dz_lsm = data_dz;
+            amrex::Print() << "SLM: " << m_nz_lsm << " soil layers from " << data_source << ": "
+                           << soil_dz_string(m_dz_lsm) << " m" << std::endl;
+        } else {
+            bool match = (static_cast<int>(m_dz_lsm.size()) == nsoil_data);
+            for (int k = 0; match && k < nsoil_data; ++k) {
+                match = std::abs(m_dz_lsm[k] - data_dz[k]) <= Real(1.e-6) * data_dz[k];
+            }
+            if (!match) {
+                amrex::Abort("SLM: slm.soil_dz = " + soil_dz_string(m_dz_lsm) + " differs from "
+                             + data_source + ", " + soil_dz_string(data_dz)
+                             + " m; set it to those, or leave slm.nsoil and slm.soil_dz unset to use them");
+            }
+        }
+    } else if (!have_dz) {
+        amrex::Abort("SLM: slm.soil_dz is required -- the thicknesses in m of the slm.nsoil soil "
+                     "layers (" + std::to_string(m_nz_lsm) + " unless set), from the top down");
+    }
+
     if (m_nz_lsm < 2) {
         amrex::Abort("SLM: nsoil must be at least 2");
     }
-    pp.queryarr("soil_dz", m_dz_lsm);
-    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
-      static_cast<int>(m_dz_lsm.size()) == m_nz_lsm,
-      "Provided soil thicknesses most match number of soil layers");
-    AMREX_ALWAYS_ASSERT(static_cast<int>(m_dz_lsm.size()) > 0);
+    if (static_cast<int>(m_dz_lsm.size()) != m_nz_lsm) {
+        amrex::Abort("SLM: slm.soil_dz has " + std::to_string(m_dz_lsm.size())
+                     + " values but slm.nsoil is " + std::to_string(m_nz_lsm));
+    }
     for (int k = 0; k < static_cast<int>(m_dz_lsm.size()); ++k) {
         if (!std::isfinite(m_dz_lsm[k]) || m_dz_lsm[k] <= zero) {
             amrex::Abort("SLM: soil_dz values must be finite and positive");
@@ -368,9 +472,8 @@ SLM::Init (const int& /*lev*/,
         slm_init();
     }
 
-    // Following Noah-MP, zref is modified to become ztop (canopy top height) + dz0 (center height of the atmosphere's lowest grid)
+    // Following Noah-MP, zref is modified to become ztop (canopy top height) + dz0 (height above the ground of the center of the atmosphere's lowest cell)
     if (!use_wrfinput) {
-        Real zlo      = m_geom.ProbLo(2);
         Real dz       = m_geom.CellSize(2);
         for ( MFIter mfi(cons_in,TileNoZ()); mfi.isValid(); ++mfi) {
             const Box& xybx      = mfi.growntilebox(0);
@@ -379,7 +482,7 @@ SLM::Init (const int& /*lev*/,
             auto zrefxy_arr = zrefxy.array(mfi);
 
             ParallelFor(xybx, [=] AMREX_GPU_DEVICE(int i, int j, int) noexcept {
-                amrex::Real znd = (z_nd_arr) ? Compute_Zrel_AtCellCenter(i, j, 0, z_nd_arr) : zlo + myhalf*dz;
+                amrex::Real znd = (z_nd_arr) ? Compute_Zrel_AtCellCenter(i, j, 0, z_nd_arr) : myhalf*dz;
                 zrefxy_arr(i,j,0) = ztop_arr(i,j,0) + znd;
             });
         }
@@ -1146,6 +1249,7 @@ SLM::Lsm_Regrid_Level (const int& lev,
         for (int ivar = 0; ivar < static_cast<int>(unmapped_fields.size()); ++ivar) {
             source_unmapped[ivar] = saved_unmapped[ivar].get();
         }
+        source_has_atmos_state = has_atmos_state;
 
         Lsm_Interpolate_From_Source(old_geom, old_lsm_geom,
                                     IntVect(1), LSMTransferMode::ProcessedState);
@@ -1179,21 +1283,47 @@ SLM::Lsm_Interpolate_From_Source (const Geometry& source_geom,
     AMREX_ALWAYS_ASSERT(source_unmapped.size() == unmapped_fields.size());
 
     const IntVect rr2d(ref_ratio[0], ref_ratio[1], 1);
+
+    // This InterpFromCoarseLevel reads the coarse ghost cells as they are, and SLM
+    // never fills its fields' ghost cells, so they still hold the zeros of Init.
+    // Interpolate from a copy whose ghost cells between boxes (and across periodic
+    // boundaries) are filled; otherwise the fine cells next to a coarse box
+    // boundary get zeros (vegtype = 0, i.e. water). The copy leaves the source
+    // level's own ghost cells, which SLM writes to its checkpoints, as they were.
+    auto with_filled_ghosts = [] (const MultiFab& src, const Geometry& geom)
+    {
+        MultiFab tmp(src.boxArray(), src.DistributionMap(), src.nComp(), src.nGrowVect());
+        MultiFab::Copy(tmp, src, 0, 0, src.nComp(), src.nGrowVect());
+        tmp.FillBoundary(geom.periodicity());
+        return tmp;
+    };
+
+    // The vegetation and soil types are categories: a fine cell takes its coarse cell's,
+    // since a linear interpolation between two of them (17, water, and 5, say, along a
+    // coastline) gives a third (12, cropland) once SLM truncates it to an integer
+    auto interp_for = [] (int var) -> Interpolater*
+    {
+        return (var == LsmVar_SLM::vegtype || var == LsmVar_SLM::soiltype)
+            ? static_cast<Interpolater*>(&pc_interp) : static_cast<Interpolater*>(&cell_cons_interp);
+    };
+
     for (int ivar = 0; ivar < m_lsm_data_size; ++ivar) {
         AMREX_ALWAYS_ASSERT(source_data[ivar] != nullptr);
+        const MultiFab src = with_filled_ghosts(*source_data[ivar], source_lsm_geom);
         InterpFromCoarseLevel(*lsm_fab_vars[LsmDataMap[ivar]],
                               lsm_fab_vars[LsmDataMap[ivar]]->nGrowVect(),
-                              IntVect(0,0,0), *source_data[ivar], 0, 0, 1,
+                              IntVect(0,0,0), src, 0, 0, 1,
                               source_lsm_geom, m_lsm_geom, rr2d,
-                              &cell_cons_interp, m_domain_bcs_type,
+                              interp_for(LsmDataMap[ivar]), m_domain_bcs_type,
                               BCVars::cons_bc);
     }
 
     for (int ivar = 0; ivar < m_lsm_flux_size; ++ivar) {
         AMREX_ALWAYS_ASSERT(source_flux[ivar] != nullptr);
+        const MultiFab src = with_filled_ghosts(*source_flux[ivar], source_geom);
         InterpFromCoarseLevel(*lsm_fab_flux[LsmFluxMap[ivar]],
                               lsm_fab_flux[LsmFluxMap[ivar]]->nGrowVect(),
-                              IntVect(0,0,0), *source_flux[ivar], 0, 0, 1,
+                              IntVect(0,0,0), src, 0, 0, 1,
                               source_geom, m_geom, rr2d,
                               &cell_cons_interp, m_domain_bcs_type,
                               BCVars::cons_bc);
@@ -1201,13 +1331,20 @@ SLM::Lsm_Interpolate_From_Source (const Geometry& source_geom,
 
     for (int ivar = 0; ivar < static_cast<int>(unmapped_fields.size()); ++ivar) {
         AMREX_ALWAYS_ASSERT(source_unmapped[ivar] != nullptr);
+        const MultiFab src = with_filled_ghosts(*source_unmapped[ivar], source_lsm_geom);
         InterpFromCoarseLevel(*lsm_fab_vars[unmapped_fields[ivar]],
                               lsm_fab_vars[unmapped_fields[ivar]]->nGrowVect(),
-                              IntVect(0,0,0), *source_unmapped[ivar], 0, 0, 1,
+                              IntVect(0,0,0), src, 0, 0, 1,
                               source_lsm_geom, m_lsm_geom, rr2d,
-                              &cell_cons_interp, m_domain_bcs_type,
+                              interp_for(unmapped_fields[ivar]), m_domain_bcs_type,
                               BCVars::cons_bc);
     }
+
+    // tref, qref and pref were interpolated from the source, so they are only as
+    // good as the source's. A level made at initialization, before any
+    // Update_Lsm_Vars, gets zeros, and init_slm_vars must then run again once
+    // this level's own Update_Lsm_Vars has filled them.
+    has_atmos_state = source_has_atmos_state;
 
     if (mode == LSMTransferMode::RawInput) {
         first_step = true;
@@ -1217,6 +1354,7 @@ SLM::Lsm_Interpolate_From_Source (const Geometry& source_geom,
         initialize_zrefxy();
         first_step = false;
         wrfinput_initialized = use_wrfinput;
+        init_from_atmos_pending = !has_atmos_state;
     }
 }
 
@@ -1226,7 +1364,6 @@ SLM::Lsm_Interpolate_From_Source (const Geometry& source_geom,
 void
 SLM::initialize_zrefxy ()
 {
-    const Real zlo = m_geom.ProbLo(2);
     const Real dz = m_geom.CellSize(2);
     for (MFIter mfi(landtype, TileNoZ()); mfi.isValid(); ++mfi) {
         const Box& xybx = mfi.growntilebox(0);
@@ -1239,7 +1376,7 @@ SLM::initialize_zrefxy ()
         ParallelFor(xybx, [=] AMREX_GPU_DEVICE(int i, int j, int) noexcept {
             if (landmask_arr(i, j, 0) == 1) {
                 const Real znd = z_nd_arr ? Compute_Zrel_AtCellCenter(i, j, 0, z_nd_arr)
-                                           : zlo + myhalf * dz;
+                                           : myhalf * dz;
                 zrefxy_arr(i, j, 0) = ztop_arr(i, j, 0) + znd;
             }
         });
@@ -2735,19 +2872,23 @@ void SLM::UpdateLAI (const amrex::MFIter &mfi)
         static constexpr double dpy[] = {0.0  ,  31.0,  59.0,  90.0, 120.0, 151.0,
                                         181.0, 212.0, 243.0, 273.0, 304.0, 334.0};
         bool leap = (m_orbital_year % 4 == 0 && (!(m_orbital_year % 100 == 0) || (m_orbital_year % 400 == 0))) ? true : false;
-        m_calday = dpy[m_orbital_mon-1] + (m_orbital_day-1.0) + m_orbital_sec/86400.0;
-        // add extra day if leap year
-        if (leap) { m_calday += one; }
+        // In a leap year, 29 February shifts the start of every month from March on by
+        // one day; the dates, the month boundaries and the year end must all agree on it.
+        const Real leap_day = (leap) ? one : zero;
+        auto month_start = [&] (const int m) { return dpy[m] + ((m >= 2) ? leap_day : zero); };
 
         int curr_mon = m_orbital_mon - 1;
         int next_mon = curr_mon + 1;
-        Real t0 = dpy[curr_mon];
+        m_calday = month_start(curr_mon) + (m_orbital_day-1.0) + m_orbital_sec/86400.0;
+
+        Real t0 = month_start(curr_mon);
         Real t1;
-        if (next_mon >= 11) {
+        if (next_mon > 11) {
+            // December interpolates toward the following January
             next_mon = 0;
-            t1 = 365.0;
+            t1 = 365.0 + leap_day;
         } else {
-            t1 = dpy[next_mon];
+            t1 = month_start(next_mon);
         }
 
         const Real d_calday = m_calday;
@@ -4742,6 +4883,7 @@ void SLM::Copy_State_to_Lsm (const MultiFab& cons_in, const MultiFab& u_in, cons
             slm_zenith(i, j, khi) = slm_zenith(i, j, 0);
         });
     }
+    has_atmos_state = true;
 
 #ifdef ERF_USE_NETCDF
     if (rad_input_file != "")
