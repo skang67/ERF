@@ -2772,7 +2772,7 @@ MOSTAverage::compute_eb_averages (const int& lev)
         denom[1]   = one / m_total_bndry_area[lev][1];
         val_old[1] = plane_average[1]*d_fact_old;
 
-        int iavg = m_navg - 1;  // Tangential velocity magnitude
+        int iavg = m_navg - 3;  // Tangential velocity magnitude
         denom[iavg]   = one / m_total_bndry_area[lev][iavg];
         val_old[iavg] = plane_average[iavg]*d_fact_old;
 
