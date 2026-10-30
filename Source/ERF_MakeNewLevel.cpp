@@ -553,6 +553,27 @@ ERF::MakeNewLevelFromCoarse (int lev, Real time, const BoxArray& ba,
 
     if (lev == 0) init_bcs();
 
+    // ****************************************************************************************
+    // Build EB and immersed-forcing factories before allocating level arrays.
+    // ****************************************************************************************
+    if ( solverChoice.terrain_type == TerrainType::EB ||
+         solverChoice.terrain_type == TerrainType::ImmersedForcing ||
+         solverChoice.buildings_type == BuildingsType::ImmersedForcing)
+    {
+        const amrex::EB2::IndexSpace& ebis = amrex::EB2::IndexSpace::top();
+        const EB2::Level& eb_level = ebis.getLevel(geom[lev]);
+        if (solverChoice.terrain_type == TerrainType::EB) {
+            eb[lev]->make_all_factories(lev, geom[lev], ba, dm, eb_level);
+        } else if (solverChoice.terrain_type == TerrainType::ImmersedForcing ||
+                   solverChoice.buildings_type == BuildingsType::ImmersedForcing) {
+#if USE_FC_FACTORY
+            eb[lev]->make_all_factories(lev, geom[lev], ba, dm, eb_level);
+#else
+            eb[lev]->make_cc_factory(lev, geom[lev], ba, dm, eb_level);
+#endif
+        }
+    }
+
     //********************************************************************************************
     // This allocates all kinds of things, including but not limited to: solution arrays,
     //      terrain arrays, ba2d, metric terms and base state.
@@ -585,26 +606,6 @@ ERF::MakeNewLevelFromCoarse (int lev, Real time, const BoxArray& ba,
     t_new[lev] = time;
     t_old[lev] = time - bogus_large_value;
 
-    // ********************************************************************************************
-    // Build the data structures for metric quantities used with terrain-fitted coordinates
-    // ********************************************************************************************
-    if ( solverChoice.terrain_type == TerrainType::EB ||
-         solverChoice.terrain_type == TerrainType::ImmersedForcing ||
-         solverChoice.buildings_type == BuildingsType::ImmersedForcing)
-    {
-        const amrex::EB2::IndexSpace& ebis = amrex::EB2::IndexSpace::top();
-        const EB2::Level& eb_level = ebis.getLevel(geom[lev]);
-        if (solverChoice.terrain_type == TerrainType::EB) {
-            eb[lev]->make_all_factories(lev, geom[lev], ba, dm, eb_level);
-        } else if (solverChoice.terrain_type == TerrainType::ImmersedForcing ||
-                   solverChoice.buildings_type == BuildingsType::ImmersedForcing) {
-#if USE_FC_FACTORY
-            eb[lev]->make_all_factories(lev, geom[lev], ba, dm, eb_level);
-#else
-            eb[lev]->make_cc_factory(lev, geom[lev], ba, dm, eb_level);
-#endif
-        }
-    }
     init_zphys(lev, time);
     update_terrain_arrays(lev);
 
@@ -1108,6 +1109,25 @@ ERF::RemakeLevel (int lev, Real time, const BoxArray& ba, const DistributionMapp
         old_seb_q_sfc = keep(two_stream_rad.seb_q_sfc(lev));
     }
 
+    // Rebuild EB and immersed-forcing factories on the new boxes before allocation.
+    if ( solverChoice.terrain_type == TerrainType::EB ||
+         solverChoice.terrain_type == TerrainType::ImmersedForcing ||
+         solverChoice.buildings_type == BuildingsType::ImmersedForcing)
+    {
+        const amrex::EB2::IndexSpace& ebis = amrex::EB2::IndexSpace::top();
+        const EB2::Level& eb_level = ebis.getLevel(geom[lev]);
+        if (solverChoice.terrain_type == TerrainType::EB) {
+            eb[lev]->make_all_factories(lev, geom[lev], ba, dm, eb_level);
+        } else if (solverChoice.terrain_type == TerrainType::ImmersedForcing ||
+                   solverChoice.buildings_type == BuildingsType::ImmersedForcing) {
+#if USE_FC_FACTORY
+            eb[lev]->make_all_factories(lev, geom[lev], ba, dm, eb_level);
+#else
+            eb[lev]->make_cc_factory(lev, geom[lev], ba, dm, eb_level);
+#endif
+        }
+    }
+
     //********************************************************************************************
     // This allocates all kinds of things, including but not limited to: solution arrays,
     //      terrain arrays and metrics, and base state.
@@ -1221,26 +1241,6 @@ ERF::RemakeLevel (int lev, Real time, const BoxArray& ba, const DistributionMapp
         }
     }
 
-    // ********************************************************************************************
-    // Build the data structures for terrain-related quantities
-    // ********************************************************************************************
-    if ( solverChoice.terrain_type == TerrainType::EB ||
-         solverChoice.terrain_type == TerrainType::ImmersedForcing ||
-         solverChoice.buildings_type == BuildingsType::ImmersedForcing)
-    {
-        const amrex::EB2::IndexSpace& ebis = amrex::EB2::IndexSpace::top();
-        const EB2::Level& eb_level = ebis.getLevel(geom[lev]);
-        if (solverChoice.terrain_type == TerrainType::EB) {
-            eb[lev]->make_all_factories(lev, geom[lev], ba, dm, eb_level);
-        } else if (solverChoice.terrain_type == TerrainType::ImmersedForcing ||
-                   solverChoice.buildings_type == BuildingsType::ImmersedForcing) {
-#if USE_FC_FACTORY
-            eb[lev]->make_all_factories(lev, geom[lev], ba, dm, eb_level);
-#else
-            eb[lev]->make_cc_factory(lev, geom[lev], ba, dm, eb_level);
-#endif
-        }
-    }
     remake_zphys(lev, time, temp_zphys_nd);
     update_terrain_arrays(lev);
 
