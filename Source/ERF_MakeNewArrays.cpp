@@ -288,7 +288,7 @@ ERF::init_stuff (int lev, const BoxArray& ba, const DistributionMapping& dm,
     make_flux_register(lev);
 
     // ********************************************************************************************
-    // Define Theta_prim storage if using surface_layer BC
+    // Define primitive storage for physical or embedded SurfaceLayer owners
     // ********************************************************************************************
     Theta_prim[lev] = nullptr;
     Qv_prim[lev]    = nullptr;
@@ -296,7 +296,8 @@ ERF::init_stuff (int lev, const BoxArray& ba, const DistributionMapping& dm,
 
     for (OrientationIter oit; oit; ++oit) {
         Orientation ori = oit();
-        if (phys_bc_type[ori] == ERF_BC::surface_layer) {
+        const bool eb_surface_layer = static_cast<int>(ori) == Orientation::zlo() && use_eb_surface_layer();
+        if ((phys_bc_type[ori] == ERF_BC::surface_layer) || eb_surface_layer) {
             amrex::Print() << " Found MOST at face " << ori << " : Constructing primitive vars for MOST.." << std::endl;
             Theta_prim[lev] = std::make_unique<MultiFab>(ba,dm,1,IntVect(ngrow_state,ngrow_state,1));
             if (solverChoice.moisture_type != MoistureType::None) {

@@ -326,7 +326,8 @@ ERF::WriteCheckpointFile () const
        int n_faces = 0;
        for (OrientationIter oit; oit; ++oit) {
            Orientation ori = oit();
-           if (phys_bc_type[ori] == ERF_BC::surface_layer) {
+           const bool eb_surface_layer = static_cast<int>(ori) == Orientation::zlo() && use_eb_surface_layer();
+           if ((phys_bc_type[ori] == ERF_BC::surface_layer) || eb_surface_layer) {
                n_faces += 1;
            }
        }
@@ -625,11 +626,12 @@ ERF::WriteCheckpointFile () const
         }
 #endif
 
-        // Count number of surface layer boundaries to determine face prefix
+        // Count SurfaceLayer owners (including EB) to determine the state-file prefix
         int n_faces = 0;
         for (OrientationIter oit; oit; ++oit) {
             Orientation ori = oit();
-            if (phys_bc_type[ori] == ERF_BC::surface_layer) {
+            const bool eb_surface_layer = static_cast<int>(ori) == Orientation::zlo() && use_eb_surface_layer();
+            if ((phys_bc_type[ori] == ERF_BC::surface_layer) || eb_surface_layer) {
                 n_faces += 1;
             }
         }
@@ -2340,11 +2342,12 @@ ERF::ReadVelsOnlyFromCheckpointFile (int lev_to_fill, std::string& chkfile_for_v
 void
 ERF::ReadCheckpointFileSurfaceLayer ()
 {
-    // Count number of surface layer boundaries to determine face prefix
+    // Count SurfaceLayer owners (including EB) to determine the state-file prefix
     int n_faces = 0;
     for (OrientationIter oit; oit; ++oit) {
         Orientation ori = oit();
-        if (phys_bc_type[ori] == ERF_BC::surface_layer) {
+        const bool eb_surface_layer = static_cast<int>(ori) == Orientation::zlo() && use_eb_surface_layer();
+        if ((phys_bc_type[ori] == ERF_BC::surface_layer) || eb_surface_layer) {
             n_faces += 1;
         }
     }

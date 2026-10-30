@@ -92,7 +92,8 @@ ERF::sum_integrated_quantities (double time)
     Real h_avg_tstar = zero;
     Real h_avg_olen  = zero;
     Orientation zlo(Direction::z, Orientation::low);
-    if ((m_SurfaceLayer[zlo] != nullptr) && (NumDataLogs() > 0)) {
+    if ((m_SurfaceLayer[zlo] != nullptr) && (NumDataLogs() > 0) &&
+        (!use_eb_surface_layer() || (phys_bc_type[zlo] == ERF_BC::surface_layer))) {
         // Sum each surface cell once: on grids split in z the planar arrays hold one
         // duplicate box per stacked 3D box
         h_avg_ustar = m_SurfaceLayer[zlo]->surface_sum(0, *m_SurfaceLayer[zlo]->get_u_star(0));

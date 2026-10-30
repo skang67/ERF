@@ -1149,6 +1149,8 @@ private:
 
     [[nodiscard]] bool has_surface_layer_inputs (const std::string& prefix) const;
 
+    [[nodiscard]] bool use_eb_surface_layer () const;
+
     // set covered coarse cells/faces to be the average of overlying fine cells/faces
     void AverageDown ();
 

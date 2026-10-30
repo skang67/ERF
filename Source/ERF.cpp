@@ -1813,13 +1813,14 @@ ERF::InitData_post ()
     // NOTE: we must set up the MOST routine after calling FillPatch
     //       in order to have lateral ghost cells filled (MOST + terrain interp).
     bool updated_prim = false;
-    // Count number of surface layer boundaries to determine correct parser prefix
+    // Count owners for parser prefixes; record physical SurfaceLayer faces separately.
     int n_faces = 0;
     amrex::GpuArray<int, AMREX_SPACEDIM*2> surface_layer_faces{};
     for (OrientationIter oit; oit; ++oit) {
         Orientation ori = oit();
+        const bool eb_surface_layer = static_cast<int>(ori) == Orientation::zlo() && use_eb_surface_layer();
+        if ((phys_bc_type[ori] == ERF_BC::surface_layer) || eb_surface_layer) { n_faces += 1; }
         if (phys_bc_type[ori] == ERF_BC::surface_layer) {
-            n_faces += 1;
             surface_layer_faces[static_cast<int>(ori)] = 1;
         }
     }
@@ -1831,7 +1832,7 @@ ERF::InitData_post ()
     // live ParmParse table cannot be asked this question here.
     bool use_legacy_zlo_prefix = false;
     if (n_faces > 1 &&
-        phys_bc_type[Orientation::zlo()] == ERF_BC::surface_layer) {
+        ((phys_bc_type[Orientation::zlo()] == ERF_BC::surface_layer) || use_eb_surface_layer())) {
         const bool has_legacy_inputs = has_surface_layer_inputs(pp_prefix);
         const bool has_zlo_inputs = has_surface_layer_inputs(
             pp_prefix + "." + BoundaryFaceName[Orientation::zlo()]);
@@ -1855,7 +1856,8 @@ ERF::InitData_post ()
     bool any_surface_layer = false;
     for (OrientationIter oit; oit; ++oit) {
         Orientation ori = oit();
-        if (phys_bc_type[ori] == ERF_BC::surface_layer) {
+        const bool eb_surface_layer = static_cast<int>(ori) == Orientation::zlo() && use_eb_surface_layer();
+        if ((phys_bc_type[ori] == ERF_BC::surface_layer) || eb_surface_layer) {
             any_surface_layer = true;
             bool has_diff = ( (solverChoice.diffChoice.molec_diff_type != MolecDiffType::None) ||
                               (solverChoice.turbChoice[0].les_type  != LESType::None)          ||
@@ -4887,4 +4889,11 @@ ERF::has_surface_layer_inputs (const std::string& prefix) const
         }
     }
     return false;
+}
+
+bool
+ERF::use_eb_surface_layer () const
+{
+    return solverChoice.terrain_type == TerrainType::EB &&
+           solverChoice.ebChoice.eb_boundary_type == EBBoundaryType::SurfaceLayer;
 }
