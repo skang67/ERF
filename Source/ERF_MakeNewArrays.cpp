@@ -183,16 +183,22 @@ ERF::init_stuff (int lev, const BoxArray& ba, const DistributionMapping& dm,
     lev_new[Vars::yvel].define(convert(ba, IntVect(0,1,0)), dm, 1, ngrow_vels);
     lev_old[Vars::yvel].define(convert(ba, IntVect(0,1,0)), dm, 1, ngrow_vels);
 
-    // Set these to avoid operations on uninitialized data
-    lev_new[Vars::xvel].setVal(bogus_large_value);
-    lev_old[Vars::xvel].setVal(bogus_large_value);
-    lev_new[Vars::yvel].setVal(bogus_large_value);
-    lev_old[Vars::yvel].setVal(bogus_large_value);
+    // EB momentum-to-velocity conversion skips covered faces. Initialize those
+    // velocities to zero so new/remade levels leave no sentinels in strain stencils.
+    const Real initial_velocity = solverChoice.terrain_type == TerrainType::EB ? zero : bogus_large_value;
+    lev_new[Vars::xvel].setVal(initial_velocity);
+    lev_old[Vars::xvel].setVal(initial_velocity);
+    lev_new[Vars::yvel].setVal(initial_velocity);
+    lev_old[Vars::yvel].setVal(initial_velocity);
 
     // Note that we need the ghost cells in the z-direction if we are doing any
     // kind of domain decomposition in the vertical (at level 0 or above)
     lev_new[Vars::zvel].define(convert(ba, IntVect(0,0,1)), dm, 1, ngrow_vels);
     lev_old[Vars::zvel].define(convert(ba, IntVect(0,0,1)), dm, 1, ngrow_vels);
+    if (solverChoice.terrain_type == TerrainType::EB) {
+        lev_new[Vars::zvel].setVal(zero);
+        lev_old[Vars::zvel].setVal(zero);
+    }
 
     gradp[lev][GpVars::gpx].define(convert(ba, IntVect(1,0,0)), dm, 1, 1); gradp[lev][GpVars::gpx].setVal(zero);
     gradp[lev][GpVars::gpy].define(convert(ba, IntVect(0,1,0)), dm, 1, 1); gradp[lev][GpVars::gpy].setVal(zero);
