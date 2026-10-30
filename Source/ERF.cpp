@@ -1880,11 +1880,11 @@ ERF::InitData_post ()
             //
             // Build vector of eb pointers for all levels
             amrex::Vector<const eb_*> eb_ptrs;
-            eb_ptrs.resize(finest_level + 1, nullptr);
+            eb_ptrs.resize(max_level + 1, nullptr);
             if (solverChoice.terrain_type == TerrainType::EB) {
                 AMREX_ALWAYS_ASSERT_WITH_MESSAGE(ori.coordDir() == 2 && ori.faceDir() == Orientation::Side::low,
                                                  "Surface layer with EB can only be enabled for the bottom z face");
-                for (int lev = 0; lev <= finest_level; lev++) {
+                for (int lev = 0; lev <= max_level; lev++) {
                     eb_ptrs[lev] = eb[lev] ? eb[lev].get() : nullptr;
                 }
             }
@@ -2052,7 +2052,7 @@ ERF::InitData_post ()
         } else {
             m_SurfaceLayer[ori] = nullptr;
         }
-    } // end if (phys_bc_type[Orientation(Direction::z,Orientation::low)] == ERF_BC::surface_layer)
+    } // SurfaceLayer owners
 
     // A land-surface model hands its fluxes to the atmosphere only through the surface
     // layer (make_SurfaceLayer_at_level is the one consumer of lsm_flux). Without a
