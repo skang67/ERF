@@ -2997,7 +2997,8 @@ MOSTAverage::compute_eb_averages (const int& lev)
     {
         int iavg    = m_navg - 4;
         denom[iavg] = one / m_total_bndry_area[lev][iavg];
-        // plane_avg[iavg] = plane_avg[2]
+        // Dry virtual temperature shares temperature's filtered history.
+        val_old[iavg] = val_old[3];
         Gpu::copy(Gpu::deviceToDevice, pavg.begin() + 3, pavg.begin() + 4,
                   pavg.begin() + iavg);
     }
