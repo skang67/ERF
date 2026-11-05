@@ -1,6 +1,9 @@
 #include "ERF_SurfaceLayer.H"
+#include <AMReX_Algorithm.H>
 #include <AMReX_Math.H>
 #include <AMReX_MultiFabUtil.H>
+#include <AMReX_FillPatchUtil.H>
+#include <AMReX_PhysBCFunct.H>
 #include "ERF_Constants.H"
 #include "ERF_SurfaceLayerStress.H"
 #include "ERF_SurfaceTemperature.H"
@@ -3440,6 +3443,8 @@ SurfaceLayer::init_tke_from_ustar (const int& lev,
 
 /**
  * Read or interpolate custom roughness length data.
+ * EB maps the horizontal values through every vertical cell and ghost cell;
+ * non-EB terrain retains its surface slab.
  *
  * @param[in] lev Current level
  * @param[in] fname Roughness file name; an empty name interpolates from level 0
@@ -3448,6 +3453,7 @@ void
 SurfaceLayer::read_custom_roughness (const int& lev,
                                      const std::string& fname)
 {
+    const bool is_eb = m_terrain_type == TerrainType::EB;
     // Read the file if we have it
     if (!fname.empty()) {
         // Only the ioproc reads the file
@@ -3493,7 +3499,10 @@ SurfaceLayer::read_custom_roughness (const int& lev,
         // holding fewer values than the grid has nodes would be read past its end
         {
             const Box& dom = m_geom[lev].Domain();
-            const int nnode_needed = dom.bigEnd(0) + dom.bigEnd(1) * (dom.length(0)+1) + 1;
+            int nnode_needed = dom.bigEnd(0) + dom.bigEnd(1) * (dom.length(0)+1) + 1;
+            if (is_eb) {
+                nnode_needed = dom.length(0) + (dom.length(1)-1) * (dom.length(0)+1);
+            }
             if (nnode < nnode_needed) {
                 Abort("The MOST roughness file \"" + fname + "\" holds " + std::to_string(nnode) +
                       " values but the grid at level " + std::to_string(lev) + " needs at least " +
@@ -3510,15 +3519,17 @@ SurfaceLayer::read_custom_roughness (const int& lev,
         Real* yp  = d_y.data();
         Real* z0p = d_z0.data();
 
-        // Each rank populates it's z_0[lev] MultiFab
+        // Each rank populates its z_0[lev] MultiFab.
         const int klo = m_geom[lev].Domain().smallEnd(2);
         for (MFIter mfi(z_0[lev]); mfi.isValid(); ++mfi)
         {
-            Box gtbx = mfi.growntilebox();
+            // EB roughness extends through the entire FAB, including vertical ghosts.
+            // The shared domain lookup gives overlapping FAB ghosts identical values.
+            Box gtbx = is_eb ? mfi.fabbox() : mfi.growntilebox();
 
-            if (gtbx.smallEnd(2) != klo) { continue; }
+            if (!is_eb && gtbx.smallEnd(2) != klo) { continue; }
 
-            // Populate z_phys data
+            // Match the horizontal roughness map at the legacy node-like coordinates.
             Real tol = Real(1.0e-4);
             auto dx = m_geom[lev].CellSizeArray();
             auto ProbLoArr = m_geom[lev].ProbLoArray();
@@ -3526,20 +3537,23 @@ SurfaceLayer::read_custom_roughness (const int& lev,
             int jlo = m_geom[lev].Domain().smallEnd(1);
             int ihi = m_geom[lev].Domain().bigEnd(0);
             int jhi = m_geom[lev].Domain().bigEnd(1);
+            const int file_i_offset = is_eb ? ilo : 0;
+            const int file_j_offset = is_eb ? jlo : 0;
 
             Array4<Real> const& z0_arr = z_0[lev].array(mfi);
-            ParallelFor(gtbx, [=] AMREX_GPU_DEVICE (int i, int j, int /*k*/)
+            ParallelFor(gtbx, [=] AMREX_GPU_DEVICE (int i, int j, int k)
             {
                 // Clip indices for ghost-cells
-                int ii = amrex::min(amrex::max(i,ilo),ihi);
-                int jj = amrex::min(amrex::max(j,jlo),jhi);
+                int ii = amrex::Clamp(i,ilo,ihi) - file_i_offset;
+                int jj = amrex::Clamp(j,jlo,jhi) - file_j_offset;
+                const int roughness_k = is_eb ? k : klo;
 
                 // Location of nodes
                 Real x = ProbLoArr[0]  + ii  * dx[0];
                 Real y = ProbLoArr[1]  + jj  * dx[1];
                 int inode = ii + jj * (ihi-ilo+2); // stride is Nx+1
                 if (std::sqrt(amrex::Math::powi<2>(x-xp[inode])+amrex::Math::powi<2>(y-yp[inode])) < tol) {
-                    z0_arr(i,j,klo) = z0p[inode];
+                    z0_arr(i,j,roughness_k) = z0p[inode];
                 } else {
                     // Unexpected list order, do brute force search
                     Real z0loc = zero;
@@ -3554,7 +3568,7 @@ SurfaceLayer::read_custom_roughness (const int& lev,
                     }
                     AMREX_ASSERT_WITH_MESSAGE(found, "Location read from terrain file does not match the grid!");
                     amrex::ignore_unused(found);
-                    z0_arr(i,j,klo) = z0loc;
+                    z0_arr(i,j,roughness_k) = z0loc;
                 }
             });
         } // mfi
@@ -3576,12 +3590,23 @@ SurfaceLayer::read_custom_roughness (const int& lev,
 
         // Create interp object and interpolate from the coarsest grid
         MFInterpolater* interp = &mf_cell_cons_interp;
-        interp->interp(z_0[0]  , 0,
-                       z_0[lev], 0,
-                       1, z_0[lev].nGrowVect(),
-                       m_geom[0], m_geom[lev],
-                       m_geom[lev].Domain(),ratio,
-                       bcr, 0);
+        if (is_eb) {
+            // Prepare coarse patches on the fine layout and fill physical ghosts.
+            // The raw MFInterpolater call requires matching box ownership.
+            GpuBndryFuncFab<FabFillNoOp> bndry_func(FabFillNoOp{});
+            PhysBCFunct<GpuBndryFuncFab<FabFillNoOp>>
+                cbc(m_geom[0], bcr, bndry_func), fbc(m_geom[lev], bcr, bndry_func);
+            InterpFromCoarseLevel(z_0[lev], z_0[lev].nGrowVect(), Real(0.0),
+                                 z_0[0], 0, 0, 1, m_geom[0], m_geom[lev],
+                                 cbc, 0, fbc, 0, ratio, interp, bcr, 0);
+        } else {
+            interp->interp(z_0[0]  , 0,
+                           z_0[lev], 0,
+                           1, z_0[lev].nGrowVect(),
+                           m_geom[0], m_geom[lev],
+                           m_geom[lev].Domain(),ratio,
+                           bcr, 0);
+        }
     }
 }
 
