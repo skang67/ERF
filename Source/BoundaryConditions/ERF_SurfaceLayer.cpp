@@ -10,6 +10,10 @@
 #include "ERF_SurfaceMoisture.H"
 #include "ERF_TerrainMetrics.H"
 #include "ERF_Wstar.H"
+#include <array>
+#include <charconv>
+#include <iomanip>
+#include <limits>
 
 using namespace amrex;
 
@@ -34,6 +38,114 @@ struct NearestColumn
     [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     int j (int jj) const noexcept { return amrex::min(amrex::max(jj, jlo), jhi); }
 };
+
+// Validate EB input on the host and return the model's horizontal values in
+// x-fastest order. The optional upper node row/column is not consumed by MOST.
+Gpu::HostVector<Real>
+read_eb_roughness (std::istream& file, const std::string& fname,
+                   const Geometry& geom, int lev)
+{
+    const std::string context = "MOST roughness file \"" + fname + "\" at level " +
+                                std::to_string(lev);
+    const Box& dom = geom.Domain();
+    const int nx = dom.length(0), ny = dom.length(1);
+    const Long nvalues = Long(nx) * Long(ny);
+    if (nvalues > std::numeric_limits<int>::max()) {
+        Abort(context + ": horizontal grid is too large for the roughness broadcast");
+    }
+    Gpu::HostVector<Real> values(nvalues);
+    Vector<Long> source_line((Long(nx)+1) * (Long(ny)+1), -1);
+    const auto dx = geom.CellSizeArray();
+    const auto prob_lo = geom.ProbLoArray();
+    const auto prob_hi = geom.ProbHiArray();
+    const Real tol = Real(1.e-4);
+    const std::array<const char*, 3> names{"x", "y", "z0"};
+    auto location = [] (Real x, Real y) {
+        std::ostringstream os;
+        os << std::setprecision(std::numeric_limits<Real>::max_digits10)
+           << "(" << x << ", " << y << ")";
+        return os.str();
+    };
+
+    std::string line;
+    Long lineno = 0, nrecords = 0;
+    while (std::getline(file, line)) {
+        ++lineno;
+        if (line.find_first_not_of(" \t\r") == std::string::npos) { continue; }
+        auto line_error = [&] (const std::string& problem) {
+            Abort(context + ": line " + std::to_string(lineno) + ": " + problem);
+        };
+        std::istringstream record(line);
+        std::array<std::string, 3> tokens;
+        std::string extra;
+        if (!(record >> tokens[0] >> tokens[1] >> tokens[2]) || record >> extra) {
+            line_error("expected exactly three numbers: x y z0");
+        }
+        std::array<Real, 3> point{};
+        for (int c = 0; c < 3; ++c) {
+            const char* first = tokens[c].data();
+            const char* last = first + tokens[c].size();
+            // from_chars accepts a leading minus; allow the usual leading plus too.
+            if (first != last && *first == '+') {
+                ++first;
+                if (first != last && *first == '-') {
+                    line_error(std::string("invalid number for ") + names[c]);
+                }
+            }
+            double parsed = 0.0;
+            const auto result = std::from_chars(first, last, parsed);
+            if (result.ec == std::errc::result_out_of_range) {
+                line_error(std::string("number out of range for ") + names[c]);
+            }
+            if (result.ec != std::errc{} || result.ptr != last) {
+                line_error(std::string("invalid number for ") + names[c]);
+            }
+            if (!std::isfinite(parsed) || (c == 2 && parsed <= 0.0)) {
+                line_error(std::string(names[c]) +
+                           (c == 2 ? " must be finite and strictly positive" : " must be finite"));
+            }
+            if (std::abs(parsed) > double(std::numeric_limits<Real>::max())) {
+                line_error(std::string("number out of range for ") + names[c]);
+            }
+            point[c] = Real(parsed);
+            if (c == 2 && point[c] <= zero) {
+                line_error("z0 must be finite and strictly positive at the model precision");
+            }
+        }
+        ++nrecords;
+        const Real x = point[0], y = point[1];
+        // Extra samples outside the model grid remain allowed, but every
+        // record above is checked even when it will not be used.
+        if (x < prob_lo[0]-tol || x > prob_hi[0]+tol ||
+            y < prob_lo[1]-tol || y > prob_hi[1]+tol) { continue; }
+        const Real ri = std::round((x-prob_lo[0]) / dx[0]);
+        const Real rj = std::round((y-prob_lo[1]) / dx[1]);
+        if (ri < zero || ri > Real(nx) || rj < zero || rj > Real(ny)) { continue; }
+        const int i = static_cast<int>(ri), j = static_cast<int>(rj);
+        const Real model_x = prob_lo[0] + i*dx[0];
+        const Real model_y = prob_lo[1] + j*dx[1];
+        if (std::hypot(x-model_x, y-model_y) >= tol) { continue; }
+        const Long node = Long(i) + Long(j)*(Long(nx)+1);
+        if (source_line[node] >= 0) {
+            line_error("duplicate grid location " + location(model_x, model_y) +
+                       ", already supplied on line " + std::to_string(source_line[node]));
+        }
+        source_line[node] = lineno;
+        if (i < nx && j < ny) { values[Long(i)+Long(j)*nx] = point[2]; }
+    }
+    if (file.bad()) { Abort(context + ": could not read the complete file"); }
+    if (nrecords == 0) { Abort(context + ": holds no (x, y, z0) triples"); }
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            if (source_line[Long(i)+Long(j)*(Long(nx)+1)] < 0) {
+                Abort(context + ": missing horizontal model coordinate " +
+                      location(prob_lo[0]+i*dx[0], prob_lo[1]+j*dx[1]) +
+                      "; domain-wide horizontal coverage is required");
+            }
+        }
+    }
+    return values;
+}
 
 } // namespace
 
@@ -3465,44 +3577,49 @@ SurfaceLayer::read_custom_roughness (const int& lev,
                 Abort("Could not open the MOST roughness file \"" + fname + "\" given as "
                       "erf.most.roughness_file_name -- please check the file name in the inputs file");
             }
-            Real value1,value2,value3;
-            while(file>>value1>>value2>>value3){
-                m_x.push_back(value1);
-                m_y.push_back(value2);
-                m_z0.push_back(value3);
+            if (is_eb) {
+                m_z0 = read_eb_roughness(file, fname, m_geom[lev], lev);
+            } else {
+                Real value1,value2,value3;
+                while(file>>value1>>value2>>value3){
+                    m_x.push_back(value1);
+                    m_y.push_back(value2);
+                    m_z0.push_back(value3);
+                }
+
+                AMREX_ALWAYS_ASSERT(m_x.size() == m_y.size());
+                AMREX_ALWAYS_ASSERT(m_x.size() == m_z0.size());
+
+                if (m_x.empty()) {
+                    Abort("The MOST roughness file \"" + fname + "\" holds no (x, y, z0) triples");
+                }
             }
             file.close();
-
-            AMREX_ALWAYS_ASSERT(m_x.size() == m_y.size());
-            AMREX_ALWAYS_ASSERT(m_x.size() == m_z0.size());
-
-            if (m_x.empty()) {
-                Abort("The MOST roughness file \"" + fname + "\" holds no (x, y, z0) triples");
-            }
         }
 
         // Broadcast the whole domain to every rank
         int ioproc = ParallelDescriptor::IOProcessorNumber();
-        int nnode = static_cast<int>(m_x.size());
+        int nnode = static_cast<int>(m_z0.size());
         ParallelDescriptor::Bcast(&nnode, 1, ioproc);
 
         if (!ParallelDescriptor::IOProcessor()) {
-            m_x.resize(nnode);
-            m_y.resize(nnode);
+            if (!is_eb) {
+                m_x.resize(nnode);
+                m_y.resize(nnode);
+            }
             m_z0.resize(nnode);
         }
-        ParallelDescriptor::Bcast(m_x.data() , nnode, ioproc);
-        ParallelDescriptor::Bcast(m_y.data() , nnode, ioproc);
+        if (!is_eb) {
+            ParallelDescriptor::Bcast(m_x.data() , nnode, ioproc);
+            ParallelDescriptor::Bcast(m_y.data() , nnode, ioproc);
+        }
         ParallelDescriptor::Bcast(m_z0.data(), nnode, ioproc);
 
         // The loop below indexes the file's values as nodes of this level's grid, so a file
         // holding fewer values than the grid has nodes would be read past its end
-        {
+        if (!is_eb) {
             const Box& dom = m_geom[lev].Domain();
-            int nnode_needed = dom.bigEnd(0) + dom.bigEnd(1) * (dom.length(0)+1) + 1;
-            if (is_eb) {
-                nnode_needed = dom.length(0) + (dom.length(1)-1) * (dom.length(0)+1);
-            }
+            const int nnode_needed = dom.bigEnd(0) + dom.bigEnd(1) * (dom.length(0)+1) + 1;
             if (nnode < nnode_needed) {
                 Abort("The MOST roughness file \"" + fname + "\" holds " + std::to_string(nnode) +
                       " values but the grid at level " + std::to_string(lev) + " needs at least " +
@@ -3511,9 +3628,11 @@ SurfaceLayer::read_custom_roughness (const int& lev,
         }
 
         // Copy data to the GPU
-        Gpu::DeviceVector<Real> d_x(nnode),d_y(nnode),d_z0(nnode);
-        Gpu::copy(Gpu::hostToDevice, m_x.begin(), m_x.end(), d_x.begin());
-        Gpu::copy(Gpu::hostToDevice, m_y.begin(), m_y.end(), d_y.begin());
+        Gpu::DeviceVector<Real> d_x(is_eb ? 0 : nnode),d_y(is_eb ? 0 : nnode),d_z0(nnode);
+        if (!is_eb) {
+            Gpu::copy(Gpu::hostToDevice, m_x.begin(), m_x.end(), d_x.begin());
+            Gpu::copy(Gpu::hostToDevice, m_y.begin(), m_y.end(), d_y.begin());
+        }
         Gpu::copy(Gpu::hostToDevice, m_z0.begin(), m_z0.end(), d_z0.begin());
         Real* xp  = d_x.data();
         Real* yp  = d_y.data();
@@ -3539,6 +3658,7 @@ SurfaceLayer::read_custom_roughness (const int& lev,
             int jhi = m_geom[lev].Domain().bigEnd(1);
             const int file_i_offset = is_eb ? ilo : 0;
             const int file_j_offset = is_eb ? jlo : 0;
+            const int file_stride = is_eb ? ihi-ilo+1 : ihi-ilo+2;
 
             Array4<Real> const& z0_arr = z_0[lev].array(mfi);
             ParallelFor(gtbx, [=] AMREX_GPU_DEVICE (int i, int j, int k)
@@ -3547,11 +3667,16 @@ SurfaceLayer::read_custom_roughness (const int& lev,
                 int ii = amrex::Clamp(i,ilo,ihi) - file_i_offset;
                 int jj = amrex::Clamp(j,jlo,jhi) - file_j_offset;
                 const int roughness_k = is_eb ? k : klo;
+                const int inode = ii + jj * file_stride;
+                if (is_eb) {
+                    // Coverage and values were validated and ordered on the I/O rank.
+                    z0_arr(i,j,k) = z0p[inode];
+                    return;
+                }
 
                 // Location of nodes
                 Real x = ProbLoArr[0]  + ii  * dx[0];
                 Real y = ProbLoArr[1]  + jj  * dx[1];
-                int inode = ii + jj * (ihi-ilo+2); // stride is Nx+1
                 if (std::sqrt(amrex::Math::powi<2>(x-xp[inode])+amrex::Math::powi<2>(y-yp[inode])) < tol) {
                     z0_arr(i,j,roughness_k) = z0p[inode];
                 } else {
